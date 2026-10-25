@@ -1,4 +1,4 @@
-export type TimeOfDay = 'siang' | 'senja' | 'malam';
+export type TimeOfDay = 'pagi' | 'siang' | 'sore' | 'malam';
 export type WeatherType = 'cerah' | 'hujan';
 export type CameraMode = 'chase' | 'far' | 'top';
 export type OutfitStyle = 'ojol' | 'batik' | 'jaket_kulit';
@@ -27,6 +27,14 @@ export interface Mission {
   requiredVehicle?: VehicleType;
 }
 
+export interface ShopItem {
+  id: string;
+  name: string;
+  price: number;
+  healAmount: number;
+  description: string;
+}
+
 export interface InteractableSpot {
   id: string;
   name: string;
@@ -36,6 +44,7 @@ export interface InteractableSpot {
   position: { x: number; z: number };
   radius: number;
   description: string;
+  items: ShopItem[];
 }
 
 export type PedestrianArchetype =
@@ -65,5 +74,10 @@ export interface HudState {
   targetCoords: { x: number; z: number; label: string } | null;
   trafficCoords: { x: number; z: number; type: VehicleType }[];
   completedMissionIds: string[];
+  timeOfDay: TimeOfDay;
+  clockTimeText: string;
+  autoTime: boolean;
+  weather: WeatherType;
 }
+
 

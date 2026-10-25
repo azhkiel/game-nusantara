@@ -15,10 +15,12 @@ import { soundFX } from '../utils/sound';
 import {
   createBengkelCat,
   createGapuraMerahPutih,
+  createHutanSungaiBlock,
   createIndoalfaMinimarket,
   createMasjidNusantara,
   createMonasLandmark,
   createNPCPedestrian,
+  createOuterRiverSystem,
   createPlayerCharacter,
   createSekolahNusantara,
   createTamanKota,
@@ -107,7 +109,15 @@ export class CityEngine {
   private cloudGroups: { group: THREE.Group; speed: number }[] = [];
   private rainGroup!: THREE.Group;
   private rainLines!: THREE.LineSegments;
-  private rainDropsCount = 850;
+  private rainDropsCount = 1150;
+  private rainParticles!: THREE.Points;
+  private rainParticleCount = 540;
+  private rainSplashes!: THREE.InstancedMesh;
+  private rainSplashCount = 96;
+  private rainSplashPhases!: Float32Array;
+  private rainSplashPositions!: Float32Array;
+  private lightningTimer = 14.0;
+  private lightningFlash = 0;
 
   // Actors & World state
   private playerMesh!: THREE.Group;
@@ -128,14 +138,16 @@ export class CityEngine {
   private missionBeaconRing!: THREE.Mesh;
   private gpsArrowGroup!: THREE.Group;
 
-  // Game State
+  // Game State (start at 75% health so player can immediately test Warung Pecel Lele / Es Teh healing!)
   private money = 250000;
-  private health = 100;
+  private health = 75;
   private maxHealth = 100;
   private wantedStars = 0;
   private wantedDecayTimer = 0;
   private cameraMode: CameraMode = 'chase';
-  private timeOfDay: TimeOfDay = 'siang';
+  private timeOfDay: TimeOfDay = 'pagi';
+  private clockHour = 8.0; // Starts at 08:00 WIB (Pagi Cerah) and progresses automatically
+  private autoTime = true;
   private weather: WeatherType = 'cerah';
 
   private activeMission: Mission | null = null;
@@ -144,14 +156,14 @@ export class CityEngine {
   private completedMissionIds: string[] = [];
   private notification: HudState['notification'] = {
     title: 'Selamat Datang di Kota Raya Nusantara!',
-    subtitle: 'Tugu Monas (Barat) & Tugu Surabaya (Timur) kini berdiri di lahan taman sendiri!',
+    subtitle: 'Waktu berjalan otomatis (Pagi → Siang → Sore → Malam). Aktifkan Hujan untuk efek partikel & suara rintik hujan!',
     tone: 'info',
   };
   private notificationTimer = 7.0;
 
   // Input state
   private keys: Record<string, boolean> = {};
-  private virtualInput = { forward: 0, turn: 0, brake: false };
+  private virtualInput = { forward: 0, turn: 0, brake: false, sprint: false };
   private cameraOrbitOffset = 0;
   private isPointerDragging = false;
   private lastPointerX = 0;
@@ -335,10 +347,10 @@ export class CityEngine {
       }
     }
 
-    // 4. Add 4 Gateway Avenue Spurs extending to ±142m under the Gapura Merah Putih arches
-    addRoadSegment('ns', 0, 127, 142);
+    // 4. Add 4 Gateway Avenue Spurs extending across the River Bridges (±166m)
+    addRoadSegment('ns', 0, 127, 168);
     addRoadSegment('ns', 0, -142, -127);
-    addRoadSegment('ew', 0, 127, 142);
+    addRoadSegment('ew', 0, 127, 168);
     addRoadSegment('ew', 0, -142, -127);
 
     // 5. Neatly Framed City Block Sidewalks (Trotoar) inside every 46m x 46m block
@@ -595,6 +607,18 @@ export class CityEngine {
     this.colliders.push({ minX: 12.0, maxX: 19.5, minZ: 79.5, maxZ: 97.0 });
     this.colliders.push({ minX: 40.5, maxX: 48.0, minZ: 79.5, maxZ: 97.0 });
 
+    // Hutan Wisata & Sungai Alami (-90, 90) — Full 41.6m x 41.6m Pine Forest, Winding River, Waterfall Cliff & Wooden Bridge
+    const hutanSungai = createHutanSungaiBlock(this.maxAnisotropy);
+    hutanSungai.position.set(-90, 0, 90);
+    this.scene.add(hutanSungai);
+    // Collider for SW Waterfall Cliff & Riverside Warung inside (-90, 90)
+    this.colliders.push({ minX: -108.5, maxX: -100.5, minZ: 100.5, maxZ: 108.5 });
+    this.colliders.push({ minX: -99.0, maxX: -92.0, minZ: 72.8, maxZ: 77.5 });
+
+    // Outer River Channels (Sungai Kalimas Nusantara along East x=148 & South z=148) + Merah-Putih Highway Bridges & Boats
+    const outerRiver = createOuterRiverSystem();
+    this.scene.add(outerRiver);
+
     // Interactive Spot Floor Rings (placed on the sidewalk in front of each venue)
     INTERACTABLE_SPOTS.forEach((spot) => {
       const markerColor =
@@ -646,8 +670,6 @@ export class CityEngine {
       { x: 90, z: -32, w: 16, h: 20, d: 16, colorIdx: 3 },
       { x: 90, z: -90, w: 18, h: 24, d: 18, colorIdx: 2 },
       { x: 90, z: 90, w: 16, h: 16, d: 16, colorIdx: 4 },
-      // South Kampung Merdeka (-90, 90) — keeping (-30, 90) for Taman Kota & (30, 90) for SMA Negeri 1!
-      { x: -90, z: 90, w: 16, h: 14, d: 16, colorIdx: 0 },
     ];
 
     rukoPlacements.forEach((b) => {
@@ -758,11 +780,12 @@ export class CityEngine {
     for (const r of ROAD_GRID_LINES) {
       if (Math.abs(x - r) < 8.8 || Math.abs(z - r) < 8.8) return false;
     }
-    // 2. Keep clear of the central plazas and walkways of Taman Monas (-90, -30), Taman Tugu Surabaya (90, 30), Taman Kota (-30, 90), & Sekolah (30, 90)
+    // 2. Keep clear of the central plazas and walkways of Taman Monas (-90, -30), Taman Tugu Surabaya (90, 30), Taman Kota (-30, 90), Sekolah (30, 90), & Hutan Sungai (-90, 90)
     if (Math.abs(x - -90) < 15.5 && Math.abs(z - -30) < 15.5) return false;
     if (Math.abs(x - 90) < 15.5 && Math.abs(z - 30) < 15.5) return false;
     if (Math.abs(x - -30) < 16.5 && Math.abs(z - 90) < 16.5) return false;
     if (Math.abs(x - 30) < 19.5 && Math.abs(z - 90) < 19.5) return false;
+    if (Math.abs(x - -90) < 20.5 && Math.abs(z - 90) < 20.5) return false;
     if (Math.abs(x - -90) < 5.2 && Math.abs(z - -30) < 22) return false;
     if (Math.abs(z - -30) < 5.2 && Math.abs(x - -90) < 22) return false;
     if (Math.abs(x - 90) < 5.2 && Math.abs(z - 30) < 22) return false;
@@ -824,14 +847,15 @@ export class CityEngine {
       }
     }
 
-    // 2. Outer Greenbelt & Coastal Perimeter Forest Ring (Radius 148m..195m)
-    for (let i = 0; i < 120; i++) {
-      const angle = (i / 120) * Math.PI * 2;
-      const radius = 150 + (i % 4) * 11;
+    // 2. Dense Outer Riverbank & Coastal Forest Belt (Hutan Lindung Lembah Sungai, Radius 162m..204m)
+    for (let i = 0; i < 185; i++) {
+      const angle = (i / 185) * Math.PI * 2;
+      const radius = 164 + (i % 5) * 9.5;
       const tx = Math.cos(angle) * radius;
       const tz = Math.sin(angle) * radius;
-      // Leave avenue gateway corridors open
-      if (Math.abs(tx) < 12 || Math.abs(tz) < 12) continue;
+      // Leave avenue gateway corridors & river channels open
+      if (Math.abs(tx) < 13 || Math.abs(tz) < 13) continue;
+      if (Math.abs(tx - 148) < 12 || Math.abs(tz - 148) < 12) continue;
       treeCoords.push([tx, tz]);
     }
 
@@ -1038,32 +1062,108 @@ export class CityEngine {
       });
     }
 
-    // 4. 3D CUACA HUJAN (Slanted Falling Rain Streaks Around Player/Camera)
+    // 4. 3D CUACA HUJAN (Multi-Layer Three.js Particle System: Falling Rain Streaks + Volumetric Mist Droplets + Ground Splash Ripples)
     this.rainGroup = new THREE.Group();
     this.rainGroup.visible = false;
+
+    // Layer 4A: High-velocity wind-slanted rain streaks (THREE.LineSegments)
     const rainVerts = new Float32Array(this.rainDropsCount * 6);
     for (let i = 0; i < this.rainDropsCount; i++) {
-      const rx = (Math.random() - 0.5) * 68;
-      const ry = Math.random() * 34;
-      const rz = (Math.random() - 0.5) * 68;
+      const rx = (Math.random() - 0.5) * 76;
+      const ry = Math.random() * 36;
+      const rz = (Math.random() - 0.5) * 76;
       rainVerts[i * 6] = rx;
       rainVerts[i * 6 + 1] = ry;
       rainVerts[i * 6 + 2] = rz;
-      rainVerts[i * 6 + 3] = rx - 0.22;
-      rainVerts[i * 6 + 4] = ry - 1.65;
-      rainVerts[i * 6 + 5] = rz - 0.15;
+      rainVerts[i * 6 + 3] = rx - 0.34;
+      rainVerts[i * 6 + 4] = ry - 1.85;
+      rainVerts[i * 6 + 5] = rz - 0.18;
     }
     const rainGeo = new THREE.BufferGeometry();
     rainGeo.setAttribute('position', new THREE.BufferAttribute(rainVerts, 3));
     const rainMat = new THREE.LineBasicMaterial({
       color: 0xbae6fd,
       transparent: true,
-      opacity: 0.62,
+      opacity: 0.68,
     });
     this.rainLines = new THREE.LineSegments(rainGeo, rainMat);
     this.rainLines.frustumCulled = false;
     this.rainGroup.add(this.rainLines);
+
+    // Layer 4B: Volumetric Three.js Rain Droplet & Mist Particles (THREE.Points with soft radial CanvasTexture)
+    const dropCanvas = document.createElement('canvas');
+    dropCanvas.width = 64;
+    dropCanvas.height = 64;
+    const dCtx = dropCanvas.getContext('2d')!;
+    const grad = dCtx.createRadialGradient(32, 32, 2, 32, 32, 30);
+    grad.addColorStop(0, 'rgba(224, 242, 254, 0.95)');
+    grad.addColorStop(0.45, 'rgba(186, 230, 253, 0.55)');
+    grad.addColorStop(1, 'rgba(125, 211, 252, 0)');
+    dCtx.fillStyle = grad;
+    dCtx.fillRect(0, 0, 64, 64);
+    const dropTex = new THREE.CanvasTexture(dropCanvas);
+    dropTex.colorSpace = THREE.SRGBColorSpace;
+
+    const particlePositions = new Float32Array(this.rainParticleCount * 3);
+    for (let i = 0; i < this.rainParticleCount; i++) {
+      particlePositions[i * 3] = (Math.random() - 0.5) * 68;
+      particlePositions[i * 3 + 1] = Math.random() * 28;
+      particlePositions[i * 3 + 2] = (Math.random() - 0.5) * 68;
+    }
+    const particleGeo = new THREE.BufferGeometry();
+    particleGeo.setAttribute(
+      'position',
+      new THREE.BufferAttribute(particlePositions, 3)
+    );
+    const particleMat = new THREE.PointsMaterial({
+      map: dropTex,
+      color: 0xe0f2fe,
+      size: 0.65,
+      transparent: true,
+      opacity: 0.78,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    this.rainParticles = new THREE.Points(particleGeo, particleMat);
+    this.rainParticles.frustumCulled = false;
+    this.rainGroup.add(this.rainParticles);
+
+    // Layer 4C: Ground Rain Splash Ripples (THREE.InstancedMesh on wet asphalt y = 0.05)
+    const splashGeo = new THREE.RingGeometry(0.08, 0.24, 12);
+    splashGeo.rotateX(-Math.PI / 2);
+    const splashMat = new THREE.MeshBasicMaterial({
+      color: 0xe0f2fe,
+      transparent: true,
+      opacity: 0.55,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    this.rainSplashes = new THREE.InstancedMesh(
+      splashGeo,
+      splashMat,
+      this.rainSplashCount
+    );
+    this.rainSplashes.frustumCulled = false;
+    this.rainSplashPhases = new Float32Array(this.rainSplashCount);
+    this.rainSplashPositions = new Float32Array(this.rainSplashCount * 2);
+
+    for (let i = 0; i < this.rainSplashCount; i++) {
+      this.rainSplashPhases[i] = Math.random();
+      const sx = (Math.random() - 0.5) * 48;
+      const sz = (Math.random() - 0.5) * 48;
+      this.rainSplashPositions[i * 2] = sx;
+      this.rainSplashPositions[i * 2 + 1] = sz;
+      _dummyObj.position.set(sx, 0.05, sz);
+      _dummyObj.rotation.set(0, 0, 0);
+      _dummyObj.scale.setScalar(0.5);
+      _dummyObj.updateMatrix();
+      this.rainSplashes.setMatrixAt(i, _dummyObj.matrix);
+    }
+    this.rainSplashes.instanceMatrix.needsUpdate = true;
+    this.rainGroup.add(this.rainSplashes);
+
     this.scene.add(this.rainGroup);
+    this.applyAtmosphere();
   }
 
   private spawnPlayer() {
@@ -1586,6 +1686,13 @@ export class CityEngine {
     } else if (e.code === 'KeyE') {
       e.preventDefault();
       this.triggerContextAction();
+    } else if (e.code === 'Digit1' || e.code === 'Digit2' || e.code === 'Digit3') {
+      const idx = e.code === 'Digit1' ? 0 : e.code === 'Digit2' ? 1 : 2;
+      const spot = this.findNearbySpot();
+      if (spot && spot.items[idx]) {
+        e.preventDefault();
+        this.buyShopItem(spot.id, spot.items[idx].id);
+      }
     } else if (e.code === 'KeyG') {
       e.preventDefault();
       this.honkVehicleHorn();
@@ -1626,11 +1733,24 @@ export class CityEngine {
     this.renderer.setSize(w, h);
   };
 
-  // Public Interactive APIs for HUD Dock
-  public setVirtualInput(forward: number, turn: number, brake = false) {
+  // Public Interactive APIs for HUD Dock & Mobile Touch Controller
+  public setVirtualInput(
+    forward: number,
+    turn: number,
+    brake = false,
+    sprint = false
+  ) {
     this.virtualInput.forward = forward;
     this.virtualInput.turn = turn;
     this.virtualInput.brake = brake;
+    this.virtualInput.sprint = sprint;
+  }
+
+  public triggerJump() {
+    if (!this.drivenVehicle && this.playerPos.y <= 0.01) {
+      this.playerVelocityY = 6.8;
+      soundFX.playInteractChime();
+    }
   }
 
   public toggleVehicleEnterExit() {
@@ -1816,59 +1936,82 @@ export class CityEngine {
     }
   }
 
-  public triggerContextAction() {
+  private findNearbySpot(): InteractableSpot | null {
     const pos = this.drivenVehicle
       ? this.drivenVehicle.mesh.position
       : this.playerPos;
-
     for (const spot of INTERACTABLE_SPOTS) {
       const dist = Math.hypot(spot.position.x - pos.x, spot.position.z - pos.z);
       if (dist <= spot.radius) {
-        if (this.money < spot.cost) {
-          this.showNotification(
-            'Saldo Rupiah Kurang!',
-            `Butuh Rp ${spot.cost.toLocaleString('id-ID')}. Selesaikan Misi Kota dulu!`,
-            'warning'
-          );
-          return;
-        }
-
-        this.money -= spot.cost;
-        soundFX.playCashReward();
-
-        if (spot.category === 'bengkel') {
-          this.wantedStars = 0;
-          this.health = this.maxHealth;
-          if (this.drivenVehicle) {
-            const freshColors = [0xea580c, 0x0284c7, 0x16a34a, 0xd97706, 0x7c3aed, 0xe11d48];
-            const newHex = freshColors[Math.floor(Math.random() * freshColors.length)];
-            this.drivenVehicle.mesh.traverse((child) => {
-              if (
-                child instanceof THREE.Mesh &&
-                child.material instanceof THREE.MeshPhysicalMaterial &&
-                child.material.clearcoat > 0.5
-              ) {
-                child.material.color.setHex(newHex);
-              }
-            });
-          }
-          this.showNotification(
-            'Kendaraan Dicat Ulang & Diservis!',
-            'Status Buronan Polisi (Bintang) bersih 100%!',
-            'success'
-          );
-        } else {
-          const healAmount = spot.id === 'warung_bakso' ? 100 : 65;
-          this.health = Math.min(this.maxHealth, this.health + healAmount);
-          this.showNotification(
-            `Menikmati Sajian di ${spot.name}`,
-            `Darah & Stamina pulih (+${healAmount} HP). Segar kembali!`,
-            'success'
-          );
-        }
-        this.broadcastHud(true);
-        return;
+        return spot;
       }
+    }
+    return null;
+  }
+
+  public buyShopItem(spotId: string, itemId: string) {
+    const spot = INTERACTABLE_SPOTS.find((s) => s.id === spotId);
+    if (!spot) return;
+    const item = spot.items.find((i) => i.id === itemId) || spot.items[0];
+    if (!item) return;
+
+    if (this.money < item.price) {
+      this.showNotification(
+        'Saldo Rupiah Kurang!',
+        `Harga ${item.name} Rp ${item.price.toLocaleString('id-ID')}. Selesaikan Misi Kota dulu!`,
+        'warning'
+      );
+      return;
+    }
+
+    this.money -= item.price;
+    soundFX.playCashReward();
+
+    if (spot.category === 'bengkel' && item.id === 'cat_ulang_polisi') {
+      this.wantedStars = 0;
+      this.health = this.maxHealth;
+      if (this.drivenVehicle) {
+        const freshColors = [0xea580c, 0x0284c7, 0x16a34a, 0xd97706, 0x7c3aed, 0xe11d48];
+        const newHex = freshColors[Math.floor(Math.random() * freshColors.length)];
+        this.drivenVehicle.mesh.traverse((child) => {
+          if (
+            child instanceof THREE.Mesh &&
+            child.material instanceof THREE.MeshPhysicalMaterial &&
+            child.material.clearcoat > 0.5
+          ) {
+            child.material.color.setHex(newHex);
+          }
+        });
+      }
+      this.showNotification(
+        `${item.name} Selesai!`,
+        'Warna kendaraan baru, Bintang Polisi bersih 100%, & Darah Penuh!',
+        'success'
+      );
+    } else {
+      const prevHealth = this.health;
+      this.health = Math.min(this.maxHealth, this.health + item.healAmount);
+      const actualGain = Math.max(item.healAmount, this.health - prevHealth);
+      this.showNotification(
+        `Membeli ${item.name} (-Rp ${item.price.toLocaleString('id-ID')})`,
+        `Nikmat! Bar Kesehatan bertambah +${actualGain} Darah (Sekarang: ${this.health}/${this.maxHealth} HP).`,
+        'success'
+      );
+    }
+
+    this.broadcastHud(true);
+  }
+
+  public triggerContextAction() {
+    const spot = this.findNearbySpot();
+    if (spot && spot.items.length > 0) {
+      // If health is only slightly down, buy item 0 (e.g. Es Teh Manis), else buy main meal (item 1)
+      const defaultItem =
+        this.health >= 80 || spot.items.length === 1
+          ? spot.items[0]
+          : spot.items[1];
+      this.buyShopItem(spot.id, defaultItem.id);
+      return;
     }
 
     if (!this.drivenVehicle) {
@@ -1903,25 +2046,67 @@ export class CityEngine {
     this.broadcastHud(true);
   }
 
+  private getPhaseFromHour(h: number): TimeOfDay {
+    if (h >= 5.5 && h < 10.5) return 'pagi';
+    if (h >= 10.5 && h < 15.5) return 'siang';
+    if (h >= 15.5 && h < 18.5) return 'sore';
+    return 'malam';
+  }
+
+  private formatClockHour(h: number): string {
+    const wrapped = ((h % 24) + 24) % 24;
+    const hrs = Math.floor(wrapped);
+    const mins = Math.floor((wrapped - hrs) * 60);
+    const hh = String(hrs).padStart(2, '0');
+    const mm = String(mins).padStart(2, '0');
+    return `${hh}:${mm} WIB`;
+  }
+
   public setTimeOfDay(time: TimeOfDay) {
     this.timeOfDay = time;
+    if (time === 'pagi') {
+      this.clockHour = 7.5; // 07:30 WIB Pagi
+    } else if (time === 'siang') {
+      this.clockHour = 12.5; // 12:30 WIB Siang
+    } else if (time === 'sore') {
+      this.clockHour = 16.75; // 16:45 WIB Sore / Senja
+    } else {
+      this.clockHour = 21.0; // 21:00 WIB Malam
+    }
     this.applyAtmosphere();
+    this.broadcastHud(true);
+  }
+
+  public setAutoTime(enabled: boolean) {
+    this.autoTime = enabled;
+    soundFX.playInteractChime();
+    this.showNotification(
+      enabled ? 'Siklus Waktu Otomatis Aktif' : 'Waktu Dikunci Manual',
+      enabled
+        ? 'Waktu berjalan otomatis dari Pagi → Siang → Sore → Malam.'
+        : `Waktu dikunci pada ${this.formatClockHour(this.clockHour)} (${this.timeOfDay.toUpperCase()}).`,
+      'info'
+    );
+    this.broadcastHud(true);
   }
 
   public setWeather(weather: WeatherType) {
     this.weather = weather;
+    soundFX.setRainAmbience(weather === 'hujan');
+
     if (weather === 'hujan') {
       soundFX.playThunderRumble();
+      this.lightningTimer = 9.0;
       this.showNotification(
-        'Cuaca Hujan Guyur Kota Raya!',
-        'Aspal jalanan menjadi basah & mengkilap. Awan mendung menyelimuti langit.',
+        'Cuaca Hujan Deras & Suara Rintik Hujan Aktif!',
+        'Partikel hujan Three.js, cipratan air di aspal basah, dan suara latar rintik hujan menyala.',
         'info'
       );
     } else {
       soundFX.playInteractChime();
       this.showNotification(
         'Cuaca Cerah Kembali',
-        'Langit Kota Raya kembali cerah.',
+        'Hujan reda, partikel hujan berhenti, dan langit Kota Raya kembali cerah.',
         'info'
       );
     }
@@ -1934,67 +2119,82 @@ export class CityEngine {
     this.rainGroup.visible = isRain;
 
     for (const mat of this.roadMaterials) {
-      mat.roughness = isRain ? 0.16 : 0.82;
-      mat.metalness = isRain ? 0.48 : 0.08;
+      mat.roughness = isRain ? 0.14 : 0.82;
+      mat.metalness = isRain ? 0.52 : 0.08;
       mat.needsUpdate = true;
     }
 
-    if (this.timeOfDay === 'siang') {
+    if (this.timeOfDay === 'pagi') {
+      const skyHex = isRain ? 0x64748b : 0x93c5fd;
+      this.scene.background = new THREE.Color(skyHex);
+      this.scene.fog = new THREE.FogExp2(skyHex, isRain ? 0.0056 : 0.003);
+
+      this.keyLight.color.setHex(isRain ? 0xcbd5e1 : 0xffedd5);
+      this.keyLight.intensity = isRain ? 1.05 : 1.95;
+
+      this.hemiLight.color.setHex(isRain ? 0x64748b : 0xfde68a);
+      this.hemiLight.groundColor.setHex(0x365314);
+      this.hemiLight.intensity = isRain ? 0.65 : 0.82;
+
+      this.sunGroup.visible = !isRain;
+      this.sunCoreMat.color.setHex(0xfef08a);
+      this.sunHaloMat.color.setHex(0xfb923c);
+
+      this.moonGroup.visible = false;
+      this.starsPoints.visible = false;
+      this.cloudMat.color.setHex(isRain ? 0x475569 : 0xfff7ed);
+      this.streetLampBulbs.forEach((m) => (m.emissiveIntensity = isRain ? 1.0 : 0.35));
+    } else if (this.timeOfDay === 'siang') {
       const skyHex = isRain ? 0x475569 : 0x7dd3fc;
       this.scene.background = new THREE.Color(skyHex);
-      this.scene.fog = new THREE.FogExp2(skyHex, isRain ? 0.0055 : 0.0028);
+      this.scene.fog = new THREE.FogExp2(skyHex, isRain ? 0.0055 : 0.0026);
 
       this.keyLight.color.setHex(isRain ? 0xcbd5e1 : 0xfffbeb);
-      this.keyLight.intensity = isRain ? 1.15 : 2.2;
-      this.keyLight.position.set(85, 125, 75);
+      this.keyLight.intensity = isRain ? 1.15 : 2.25;
 
       this.hemiLight.color.setHex(isRain ? 0x64748b : 0xbae6fd);
       this.hemiLight.groundColor.setHex(0x3f6212);
-      this.hemiLight.intensity = isRain ? 0.65 : 0.85;
+      this.hemiLight.intensity = isRain ? 0.65 : 0.88;
 
       this.sunGroup.visible = !isRain;
-      this.sunGroup.position.set(48, 68, -155);
       this.sunCoreMat.color.setHex(0xfef08a);
       this.sunHaloMat.color.setHex(0xfacc15);
 
       this.moonGroup.visible = false;
       this.starsPoints.visible = false;
       this.cloudMat.color.setHex(isRain ? 0x475569 : 0xffffff);
-      this.streetLampBulbs.forEach((m) => (m.emissiveIntensity = isRain ? 1.1 : 0.2));
-    } else if (this.timeOfDay === 'senja') {
+      this.streetLampBulbs.forEach((m) => (m.emissiveIntensity = isRain ? 1.1 : 0.15));
+    } else if (this.timeOfDay === 'sore') {
       const skyHex = isRain ? 0x334155 : 0xfb923c;
       this.scene.background = new THREE.Color(skyHex);
       this.scene.fog = new THREE.FogExp2(skyHex, isRain ? 0.006 : 0.0032);
 
       this.keyLight.color.setHex(isRain ? 0x94a3b8 : 0xf97316);
       this.keyLight.intensity = isRain ? 0.95 : 1.85;
-      this.keyLight.position.set(-105, 45, 55);
 
       this.hemiLight.color.setHex(isRain ? 0x475569 : 0xfdba74);
       this.hemiLight.groundColor.setHex(0x431407);
-      this.hemiLight.intensity = 0.7;
+      this.hemiLight.intensity = 0.72;
 
       this.sunGroup.visible = !isRain;
-      this.sunGroup.position.set(-72, 32, -145);
       this.sunCoreMat.color.setHex(0xfed7aa);
       this.sunHaloMat.color.setHex(0xea580c);
 
       this.moonGroup.visible = false;
       this.starsPoints.visible = false;
       this.cloudMat.color.setHex(isRain ? 0x334155 : 0xfed7aa);
-      this.streetLampBulbs.forEach((m) => (m.emissiveIntensity = 1.4));
+      this.streetLampBulbs.forEach((m) => (m.emissiveIntensity = 1.5));
     } else {
       const skyHex = isRain ? 0x060911 : 0x090d16;
       this.scene.background = new THREE.Color(skyHex);
-      this.scene.fog = new THREE.FogExp2(skyHex, isRain ? 0.0065 : 0.0036);
+      this.scene.fog = new THREE.FogExp2(skyHex, isRain ? 0.0065 : 0.0035);
 
       this.keyLight.color.setHex(0x60a5fa);
-      this.keyLight.intensity = isRain ? 0.45 : 0.65;
-      this.keyLight.position.set(40, 100, -50);
+      this.keyLight.intensity = isRain ? 0.45 : 0.68;
 
       this.hemiLight.color.setHex(0x1e293b);
       this.hemiLight.groundColor.setHex(0x0f172a);
-      this.hemiLight.intensity = 0.5;
+      this.hemiLight.intensity = 0.52;
 
       this.sunGroup.visible = false;
       this.moonGroup.visible = !isRain;
@@ -2002,10 +2202,58 @@ export class CityEngine {
       this.cloudMat.color.setHex(isRain ? 0x1e293b : 0x475569);
       this.streetLampBulbs.forEach((m) => (m.emissiveIntensity = 2.4));
     }
+
+    this.updateCelestialOrbit();
+  }
+
+  private updateCelestialOrbit() {
+    const h = ((this.clockHour % 24) + 24) % 24;
+    if (h >= 5.5 && h < 18.5) {
+      // Sun arcs smoothly from East (+145) at 05:30 to High Noon (0) at 12:00 to West (-145) at 18:30
+      const dayT = (h - 5.5) / 13.0; // 0..1
+      const angle = dayT * Math.PI; // 0..PI
+      const sunX = Math.cos(angle) * 145;
+      const sunY = Math.max(18, Math.sin(angle) * 98);
+      const sunZ = -148;
+      this.sunGroup.position.set(sunX, sunY, sunZ);
+      this.keyLight.position.set(
+        Math.cos(angle) * 110,
+        Math.max(35, Math.sin(angle) * 125),
+        65
+      );
+    } else {
+      // Moon arcs across the nocturnal sky from 18:30 to 05:30
+      const nightElapsed = h >= 18.5 ? h - 18.5 : h + 5.5;
+      const nightT = nightElapsed / 11.0; // 0..1
+      const angle = nightT * Math.PI;
+      const moonX = Math.cos(angle) * 135;
+      const moonY = Math.max(24, Math.sin(angle) * 86);
+      this.moonGroup.position.set(moonX, moonY, -145);
+      this.keyLight.position.set(moonX * 0.6, Math.max(55, moonY), -45);
+    }
   }
 
   private updateSkyAndWeather(dt: number) {
-    const windMultiplier = this.weather === 'hujan' ? 2.2 : 1.0;
+    // 1. Automatic Day-Night Progression (Pagi -> Siang -> Sore -> Malam)
+    if (this.autoTime) {
+      // 0.25 game hours per real second (~15 game minutes per second; full 24h cycle in 96 seconds)
+      this.clockHour = (this.clockHour + dt * 0.25) % 24;
+      const nextPhase = this.getPhaseFromHour(this.clockHour);
+      if (nextPhase !== this.timeOfDay) {
+        this.timeOfDay = nextPhase;
+        this.applyAtmosphere();
+      } else {
+        this.updateCelestialOrbit();
+      }
+    }
+
+    // Rotate starfield subtly at night
+    if (this.starsPoints.visible) {
+      this.starsPoints.rotation.y += dt * 0.015;
+    }
+
+    // 2. Drift Volumetric 3D Clouds (faster during rainstorms)
+    const windMultiplier = this.weather === 'hujan' ? 2.4 : 1.0;
     for (const c of this.cloudGroups) {
       c.group.position.x += c.speed * windMultiplier * dt;
       if (c.group.position.x > 185) {
@@ -2013,26 +2261,86 @@ export class CityEngine {
       }
     }
 
+    // 3. Dynamic Three.js Rain Particle System + Lightning & Thunder
     if (this.weather === 'hujan' && this.rainGroup.visible) {
       const activePos = this.drivenVehicle
         ? this.drivenVehicle.mesh.position
         : this.playerPos;
       this.rainGroup.position.set(activePos.x, 0, activePos.z);
 
+      // 3A. Animate slanted falling rain streaks (LineSegments)
       const posAttr = this.rainLines.geometry.attributes
         .position as THREE.BufferAttribute;
       const arr = posAttr.array as Float32Array;
-      const fallStep = 36 * dt;
+      const fallStep = 38 * dt;
+      const windStepX = -6.5 * dt;
 
       for (let i = 0; i < this.rainDropsCount; i++) {
+        let rx = arr[i * 6] + windStepX;
         let yTop = arr[i * 6 + 1] - fallStep;
         if (yTop < 0.2) {
-          yTop = 32 + Math.random() * 4;
+          yTop = 32 + Math.random() * 5;
+          rx = (Math.random() - 0.5) * 76;
         }
+        if (rx < -38) rx += 76;
+        arr[i * 6] = rx;
         arr[i * 6 + 1] = yTop;
-        arr[i * 6 + 4] = yTop - 1.65;
+        arr[i * 6 + 3] = rx - 0.34;
+        arr[i * 6 + 4] = yTop - 1.85;
       }
       posAttr.needsUpdate = true;
+
+      // 3B. Animate Three.js Rain Droplet & Mist Particles (Points)
+      const partAttr = this.rainParticles.geometry.attributes
+        .position as THREE.BufferAttribute;
+      const pArr = partAttr.array as Float32Array;
+      const pFallStep = 24 * dt;
+      const pWindX = -4.8 * dt;
+
+      for (let i = 0; i < this.rainParticleCount; i++) {
+        let px = pArr[i * 3] + pWindX;
+        let py = pArr[i * 3 + 1] - pFallStep;
+        if (py < 0.15) {
+          py = 25 + Math.random() * 4;
+          px = (Math.random() - 0.5) * 68;
+        }
+        if (px < -34) px += 68;
+        pArr[i * 3] = px;
+        pArr[i * 3 + 1] = py;
+      }
+      partAttr.needsUpdate = true;
+
+      // 3C. Animate Ground Rain Splash Ripples on wet asphalt (InstancedMesh)
+      for (let i = 0; i < this.rainSplashCount; i++) {
+        let phase = this.rainSplashPhases[i] + dt * 3.4;
+        if (phase >= 1.0) {
+          phase -= 1.0;
+          this.rainSplashPositions[i * 2] = (Math.random() - 0.5) * 48;
+          this.rainSplashPositions[i * 2 + 1] = (Math.random() - 0.5) * 48;
+        }
+        this.rainSplashPhases[i] = phase;
+        const sx = this.rainSplashPositions[i * 2];
+        const sz = this.rainSplashPositions[i * 2 + 1];
+        const rippleScale = 0.25 + phase * 1.45;
+        _dummyObj.position.set(sx, 0.05, sz);
+        _dummyObj.rotation.set(0, 0, 0);
+        _dummyObj.scale.setScalar(rippleScale);
+        _dummyObj.updateMatrix();
+        this.rainSplashes.setMatrixAt(i, _dummyObj.matrix);
+      }
+      this.rainSplashes.instanceMatrix.needsUpdate = true;
+
+      // 3D. Periodic Storm Lightning Flash & Thunder Rumble
+      this.lightningTimer -= dt;
+      if (this.lightningTimer <= 0) {
+        this.lightningTimer = 14 + Math.random() * 12;
+        this.lightningFlash = 1.0;
+        soundFX.playThunderRumble();
+      }
+      if (this.lightningFlash > 0) {
+        this.lightningFlash = Math.max(0, this.lightningFlash - dt * 4.5);
+        this.keyLight.intensity = 1.15 + this.lightningFlash * 2.2;
+      }
     }
   }
 
@@ -2122,15 +2430,19 @@ export class CityEngine {
       (this.keys['KeyD'] || this.keys['ArrowRight'] ? 1 : 0) +
       this.virtualInput.turn;
 
-    const isSprinting = this.keys['ShiftLeft'] || this.keys['ShiftRight'];
+    const isSprinting =
+      this.keys['ShiftLeft'] ||
+      this.keys['ShiftRight'] ||
+      this.virtualInput.sprint;
     const moveSpeed = isSprinting ? 11.5 : 7.2;
 
     if (Math.abs(turnInput) > 0.05) {
-      this.playerHeading += turnInput * 3.0 * dt;
+      this.playerHeading += THREE.MathUtils.clamp(turnInput, -1, 1) * 3.0 * dt;
     }
 
     if (Math.abs(forwardInput) > 0.05) {
-      const step = Math.sign(forwardInput) * moveSpeed * dt;
+      const clampedFwd = THREE.MathUtils.clamp(forwardInput, -1, 1);
+      const step = clampedFwd * moveSpeed * dt;
       const nextX = this.playerPos.x + Math.sin(this.playerHeading) * step;
       const nextZ = this.playerPos.z + Math.cos(this.playerHeading) * step;
 
@@ -2141,7 +2453,8 @@ export class CityEngine {
         this.playerPos.z = nextZ;
       }
 
-      this.playerWalkCycle += dt * (isSprinting ? 14 : 9);
+      this.playerWalkCycle +=
+        dt * (isSprinting ? 14 : 9) * Math.max(0.45, Math.abs(clampedFwd));
     } else {
       this.playerWalkCycle = 0;
     }
@@ -2673,6 +2986,10 @@ export class CityEngine {
           type: v.type,
         })),
       completedMissionIds: this.completedMissionIds,
+      timeOfDay: this.timeOfDay,
+      clockTimeText: this.formatClockHour(this.clockHour),
+      autoTime: this.autoTime,
+      weather: this.weather,
     });
   }
 
@@ -2744,6 +3061,7 @@ export class CityEngine {
 
   public dispose() {
     this.isDisposed = true;
+    soundFX.setRainAmbience(false);
     cancelAnimationFrame(this.frameId);
     clearTimeout(this.frameId);
 

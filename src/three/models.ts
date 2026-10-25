@@ -1986,4 +1986,400 @@ export function createSekolahNusantara(maxAnisotropy: number): THREE.Group {
   return group;
 }
 
+export function createHutanSungaiBlock(maxAnisotropy: number): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'HutanWisataDanSungaiAlami';
+
+  const forestFloorMat = new THREE.MeshStandardMaterial({
+    color: 0x14532d,
+    roughness: 0.9,
+    metalness: 0.02,
+  });
+  const rockMat = new THREE.MeshStandardMaterial({
+    color: 0x64748b,
+    roughness: 0.85,
+    metalness: 0.08,
+  });
+  const woodMat = new THREE.MeshStandardMaterial({
+    color: 0x78350f,
+    roughness: 0.78,
+    metalness: 0.05,
+  });
+  const waterMat = new THREE.MeshPhysicalMaterial({
+    color: 0x06b6d4,
+    roughness: 0.08,
+    metalness: 0.15,
+    clearcoat: 1.0,
+  });
+  const pineLeavesMat = new THREE.MeshStandardMaterial({
+    color: 0x064e3b,
+    roughness: 0.75,
+  });
+  const rainforestLeavesMat = new THREE.MeshStandardMaterial({
+    color: 0x15803d,
+    roughness: 0.72,
+  });
+
+  // 1. Forest Floor Base (41.6m x 41.6m)
+  const floor = new THREE.Mesh(
+    new THREE.BoxGeometry(41.6, 0.08, 41.6),
+    forestFloorMat
+  );
+  floor.position.y = 0.04;
+  floor.receiveShadow = true;
+  group.add(floor);
+
+  // 2. Winding Natural River Stream (Sungai Alami) flowing diagonally SW -> Center -> NE
+  const riverSegments: [number, number, number, number, number][] = [
+    [-11, 11, 8.5, 16, Math.PI / 4],
+    [0, 0, 9.2, 18, Math.PI / 4],
+    [11, -11, 8.5, 16, Math.PI / 4],
+  ];
+  riverSegments.forEach(([rx, rz, rw, rl, rotY]) => {
+    const bed = new THREE.Mesh(
+      new THREE.BoxGeometry(rw + 1.8, 0.1, rl),
+      new THREE.MeshStandardMaterial({ color: 0x475569, roughness: 0.9 })
+    );
+    bed.position.set(rx, 0.07, rz);
+    bed.rotation.y = rotY;
+    group.add(bed);
+
+    const stream = new THREE.Mesh(new THREE.BoxGeometry(rw, 0.14, rl), waterMat);
+    stream.position.set(rx, 0.11, rz);
+    stream.rotation.y = rotY;
+    group.add(stream);
+  });
+
+  // 3. Rocky Waterfall Cliff (Tebing Batu & Air Terjun Mini) in SW Corner (-14.5, 0, 14.5)
+  const cliffGroup = new THREE.Group();
+  cliffGroup.position.set(-14.5, 0, 14.5);
+  const cliffBlocks: [number, number, number, number, number, number][] = [
+    [0, 2.6, 0, 7.5, 5.2, 6.5],
+    [-2.5, 1.8, 1.5, 4.5, 3.6, 4.5],
+    [2.5, 1.9, -1.5, 4.5, 3.8, 4.5],
+  ];
+  cliffBlocks.forEach(([cx, cy, cz, w, h, d]) => {
+    const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(1, 1), rockMat);
+    rock.position.set(cx, cy, cz);
+    rock.scale.set(w * 0.55, h * 0.55, d * 0.55);
+    rock.castShadow = true;
+    rock.receiveShadow = true;
+    cliffGroup.add(rock);
+  });
+
+  // Cascading Waterfall Sheet
+  const fallWater = new THREE.Mesh(
+    new THREE.BoxGeometry(2.8, 4.6, 0.6),
+    new THREE.MeshBasicMaterial({ color: 0x67e8f9 })
+  );
+  fallWater.position.set(1.4, 2.3, -1.4);
+  fallWater.rotation.y = Math.PI / 4;
+  fallWater.rotation.x = -0.22;
+  cliffGroup.add(fallWater);
+
+  const foamPool = new THREE.Mesh(
+    new THREE.CylinderGeometry(3.2, 3.5, 0.22, 16),
+    new THREE.MeshBasicMaterial({ color: 0xe0f2fe })
+  );
+  foamPool.position.set(2.4, 0.14, -2.4);
+  cliffGroup.add(foamPool);
+  group.add(cliffGroup);
+
+  // 4. Riverbank Boulders (Batu Kali) along both sides of the river
+  const boulderCoords: [number, number, number][] = [
+    [-7, 13, 1.1],
+    [-13, 7, 1.2],
+    [-4, 9, 0.9],
+    [-9, 4, 0.85],
+    [5, -9, 1.0],
+    [9, -5, 1.15],
+    [13, -7, 0.95],
+    [7, -13, 1.05],
+    [15, -11, 1.2],
+    [-2, -6, 0.8],
+    [6, 2, 0.9],
+  ];
+  boulderCoords.forEach(([bx, bz, bScale], idx) => {
+    const boulder = new THREE.Mesh(
+      new THREE.DodecahedronGeometry(bScale, 1),
+      rockMat
+    );
+    boulder.position.set(bx, bScale * 0.45, bz);
+    boulder.scale.set(1.2, 0.68, 1.0);
+    boulder.rotation.y = idx * 0.9;
+    boulder.castShadow = true;
+    group.add(boulder);
+  });
+
+  // 5. Wooden Arch Bridge over the River (Jembatan Kayu Gantung) at (0, 0, 0)
+  const bridgeGroup = new THREE.Group();
+  bridgeGroup.rotation.y = -Math.PI / 4; // Perpendicular to the SW-NE river stream
+  const bridgeDeck = new THREE.Mesh(
+    new THREE.BoxGeometry(3.6, 0.25, 12.5),
+    woodMat
+  );
+  bridgeDeck.position.y = 0.55;
+  bridgeDeck.castShadow = true;
+  bridgeDeck.receiveShadow = true;
+  bridgeGroup.add(bridgeDeck);
+
+  for (const sz of [-5.5, -2.8, 0, 2.8, 5.5]) {
+    for (const sx of [-1.65, 1.65]) {
+      const post = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.1, 0.12, 1.25, 8),
+        woodMat
+      );
+      post.position.set(sx, 1.1, sz);
+      bridgeGroup.add(post);
+    }
+  }
+  for (const sx of [-1.65, 1.65]) {
+    const handrail = new THREE.Mesh(
+      new THREE.BoxGeometry(0.12, 0.12, 11.6),
+      woodMat
+    );
+    handrail.position.set(sx, 1.58, 0);
+    bridgeGroup.add(handrail);
+  }
+  group.add(bridgeGroup);
+
+  // 6. Dense Multi-Tiered Pine & Tropical Forest Trees inside the Block
+  const forestTreePositions: [number, number, boolean][] = [
+    [-15, -14, true],
+    [-10, -15, false],
+    [-16, -7, true],
+    [-11, -7, true],
+    [-16, 0, false],
+    [-5, -13, true],
+    [14, 14, true],
+    [9, 15, false],
+    [16, 8, true],
+    [11, 8, true],
+    [15, 1, false],
+    [6, 13, true],
+    [-4, 15, false],
+    [16, -3, true],
+  ];
+  forestTreePositions.forEach(([tx, tz, isPine], idx) => {
+    const tGroup = new THREE.Group();
+    const scale = 0.95 + (idx % 3) * 0.22;
+    const trunk = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.24, 0.38, 3.2, 8),
+      woodMat
+    );
+    trunk.position.y = 1.6;
+    trunk.castShadow = true;
+    tGroup.add(trunk);
+
+    if (isPine) {
+      // 3-Tier Indonesian Mountain Pine Tree (Pohon Pinus / Cemara)
+      const c1 = new THREE.Mesh(new THREE.ConeGeometry(2.3, 3.2, 8), pineLeavesMat);
+      c1.position.y = 3.4;
+      c1.castShadow = true;
+      tGroup.add(c1);
+
+      const c2 = new THREE.Mesh(new THREE.ConeGeometry(1.8, 2.8, 8), pineLeavesMat);
+      c2.position.y = 5.0;
+      c2.castShadow = true;
+      tGroup.add(c2);
+
+      const c3 = new THREE.Mesh(new THREE.ConeGeometry(1.2, 2.4, 8), pineLeavesMat);
+      c3.position.y = 6.4;
+      c3.castShadow = true;
+      tGroup.add(c3);
+    } else {
+      // Lush Tropical Rainforest Canopy Tree
+      const crown = new THREE.Mesh(
+        new THREE.DodecahedronGeometry(2.3, 1),
+        rainforestLeavesMat
+      );
+      crown.position.y = 4.2;
+      crown.castShadow = true;
+      tGroup.add(crown);
+    }
+
+    tGroup.position.set(tx, 0, tz);
+    tGroup.scale.setScalar(scale);
+    group.add(tGroup);
+  });
+
+  // 7. Riverside Warung Kopi & Indomie at North Entrance (-5.5, 0, -14.8) facing North (-Z)
+  const warungHutan = createWarungTenda(
+    'WARUNG KOPI & INDOMIE SUNGAI',
+    'JAGUNG BAKAR · ES TEH MANIS · KOPI TUBRUK',
+    '#dcfce7',
+    '#14532d',
+    maxAnisotropy
+  );
+  warungHutan.position.set(-5.5, 0, -14.8);
+  warungHutan.rotation.y = Math.PI;
+  group.add(warungHutan);
+
+  // Welcome Wooden Gate Sign at North Entrance (4.5, 0, -18.5)
+  const signTex = createWarungSpandukTexture(
+    'HUTAN WISATA & SUNGAI ALAMI',
+    'AIR TERJUN MINI · JEMBATAN KAYU · HUTAN PINUS',
+    '#fef08a',
+    '#14532d',
+    maxAnisotropy
+  );
+  const signBoard = new THREE.Mesh(
+    new THREE.BoxGeometry(6.6, 1.35, 0.28),
+    new THREE.MeshStandardMaterial({ map: signTex, roughness: 0.35 })
+  );
+  signBoard.position.set(4.5, 3.5, -18.5);
+  group.add(signBoard);
+
+  for (const px of [1.5, 7.5]) {
+    const pole = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.18, 0.22, 3.7, 8),
+      woodMat
+    );
+    pole.position.set(px, 1.85, -18.5);
+    group.add(pole);
+  }
+
+  return group;
+}
+
+export function createOuterRiverSystem(): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'SungaiKalimasNusantara';
+
+  const waterMat = new THREE.MeshPhysicalMaterial({
+    color: 0x0891b2,
+    roughness: 0.1,
+    metalness: 0.18,
+    clearcoat: 1.0,
+  });
+  const bankMat = new THREE.MeshStandardMaterial({
+    color: 0x475569,
+    roughness: 0.85,
+  });
+  const woodMat = new THREE.MeshStandardMaterial({
+    color: 0x78350f,
+    roughness: 0.75,
+  });
+
+  // 1. East Valley River Channel (x = 148, z = -165..156, width = 16m)
+  const eastBank = new THREE.Mesh(
+    new THREE.BoxGeometry(19.5, 0.12, 320),
+    bankMat
+  );
+  eastBank.position.set(148, 0.02, -4);
+  group.add(eastBank);
+
+  const eastWater = new THREE.Mesh(
+    new THREE.BoxGeometry(16, 0.14, 320),
+    waterMat
+  );
+  eastWater.position.set(148, 0.06, -4);
+  group.add(eastWater);
+
+  // 2. South Valley River Channel (z = 148, x = -165..156, width = 16m)
+  const southBank = new THREE.Mesh(
+    new THREE.BoxGeometry(320, 0.12, 19.5),
+    bankMat
+  );
+  southBank.position.set(-4, 0.02, 148);
+  group.add(southBank);
+
+  const southWater = new THREE.Mesh(
+    new THREE.BoxGeometry(320, 0.14, 16),
+    waterMat
+  );
+  southWater.position.set(-4, 0.06, 148);
+  group.add(southWater);
+
+  // 3. Helper to build a Merah-Putih Highway Bridge spanning across the River
+  const createHighwayBridge = (bx: number, bz: number, rotY: number) => {
+    const bGroup = new THREE.Group();
+    bGroup.position.set(bx, 0, bz);
+    bGroup.rotation.y = rotY;
+
+    // Raised Asphalt Bridge Deck
+    const deck = new THREE.Mesh(
+      new THREE.BoxGeometry(15.2, 0.32, 22),
+      new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.8 })
+    );
+    deck.position.y = 0.18;
+    deck.receiveShadow = true;
+    bGroup.add(deck);
+
+    const redSteelMat = new THREE.MeshStandardMaterial({
+      color: 0xdc2626,
+      metalness: 0.5,
+      roughness: 0.35,
+    });
+    const whiteSteelMat = new THREE.MeshStandardMaterial({
+      color: 0xf8fafc,
+      metalness: 0.4,
+      roughness: 0.35,
+    });
+
+    // Side Bridge Parapet Walls & Red-White Steel Truss Arches
+    for (const sx of [-7.2, 7.2]) {
+      const railWall = new THREE.Mesh(
+        new THREE.BoxGeometry(0.55, 1.2, 22),
+        whiteSteelMat
+      );
+      railWall.position.set(sx, 0.85, 0);
+      bGroup.add(railWall);
+
+      const topChord = new THREE.Mesh(
+        new THREE.BoxGeometry(0.45, 0.45, 18),
+        redSteelMat
+      );
+      topChord.position.set(sx, 4.2, 0);
+      bGroup.add(topChord);
+
+      for (const sz of [-8.5, -3, 3, 8.5]) {
+        const strut = new THREE.Mesh(
+          new THREE.BoxGeometry(0.4, 3.6, 0.4),
+          sz % 2 === 0 ? whiteSteelMat : redSteelMat
+        );
+        strut.position.set(sx, 2.4, sz);
+        bGroup.add(strut);
+      }
+    }
+    return bGroup;
+  };
+
+  // Place Highway Bridges where the South (0, 148) & East (148, 0) Gateway Roads cross the River!
+  group.add(createHighwayBridge(0, 148, 0));
+  group.add(createHighwayBridge(148, 0, Math.PI / 2));
+
+  // 4. Traditional Wooden Boats (Perahu Sampan Kayu) floating on the River
+  const boatCoords: [number, number, number][] = [
+    [148, -45, 0],
+    [148, 55, Math.PI],
+    [-45, 148, Math.PI / 2],
+    [65, 148, -Math.PI / 2],
+  ];
+  boatCoords.forEach(([px, pz, rotY]) => {
+    const boat = new THREE.Group();
+    const hull = new THREE.Mesh(
+      new THREE.BoxGeometry(1.9, 0.55, 5.2),
+      woodMat
+    );
+    hull.position.y = 0.32;
+    hull.castShadow = true;
+    boat.add(hull);
+
+    const canopy = new THREE.Mesh(
+      new THREE.BoxGeometry(1.7, 0.9, 2.4),
+      new THREE.MeshStandardMaterial({ color: 0x0284c7, roughness: 0.7 })
+    );
+    canopy.position.y = 0.95;
+    boat.add(canopy);
+
+    boat.position.set(px, 0, pz);
+    boat.rotation.y = rotY;
+    group.add(boat);
+  });
+
+  return group;
+}
+
+
 

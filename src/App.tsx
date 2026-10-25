@@ -18,7 +18,7 @@ import { soundFX } from './utils/sound';
 
 const INITIAL_HUD: HudState = {
   money: 250000,
-  health: 100,
+  health: 75,
   maxHealth: 100,
   wantedStars: 0,
   districtName: 'Alun-Alun Tugu Monas',
@@ -33,13 +33,17 @@ const INITIAL_HUD: HudState = {
   missionTimeLeft: 0,
   notification: {
     title: 'Selamat Datang di Kota Raya Nusantara!',
-    subtitle: 'Gunakan WASD untuk bergerak, tekan F untuk naik Bajaj atau Motor Ojol.',
+    subtitle: 'Waktu berjalan otomatis (Pagi → Siang → Sore → Malam). Aktifkan Hujan untuk efek partikel & suara rintik hujan!',
     tone: 'info',
   },
   playerCoords: { x: 0, z: 26, heading: Math.PI },
   targetCoords: null,
   trafficCoords: [],
   completedMissionIds: [],
+  timeOfDay: 'pagi',
+  clockTimeText: '08:00 WIB',
+  autoTime: true,
+  weather: 'cerah',
 };
 
 export default function App() {
@@ -47,8 +51,6 @@ export default function App() {
   const engineRef = useRef<CityEngine | null>(null);
 
   const [hud, setHud] = useState<HudState>(INITIAL_HUD);
-  const [timeOfDay, setTimeOfDay] = useState<TimeOfDay>('siang');
-  const [weather, setWeather] = useState<WeatherType>('cerah');
   const [cameraMode, setCameraMode] = useState<CameraMode>('chase');
   const [outfit, setOutfit] = useState<OutfitStyle>('ojol');
   const [isMuted, setIsMuted] = useState<boolean>(false);
@@ -84,6 +86,10 @@ export default function App() {
     engineRef.current?.triggerContextAction();
   };
 
+  const handleBuyShopItem = (spotId: string, itemId: string) => {
+    engineRef.current?.buyShopItem(spotId, itemId);
+  };
+
   const handleStartMission = (id: string) => {
     engineRef.current?.startMission(id);
   };
@@ -93,12 +99,14 @@ export default function App() {
   };
 
   const handleChangeTimeOfDay = (nextTime: TimeOfDay) => {
-    setTimeOfDay(nextTime);
     engineRef.current?.setTimeOfDay(nextTime);
   };
 
+  const handleToggleAutoTime = (enabled: boolean) => {
+    engineRef.current?.setAutoTime(enabled);
+  };
+
   const handleChangeWeather = (nextWeather: WeatherType) => {
-    setWeather(nextWeather);
     engineRef.current?.setWeather(nextWeather);
   };
 
@@ -122,12 +130,21 @@ export default function App() {
 
   const handleToggleMute = () => {
     const nextMuted = !isMuted;
-    soundFX.muted = nextMuted;
+    soundFX.setMuted(nextMuted);
     setIsMuted(nextMuted);
   };
 
-  const handleVirtualControl = (forward: number, turn: number, brake = false) => {
-    engineRef.current?.setVirtualInput(forward, turn, brake);
+  const handleVirtualControl = (
+    forward: number,
+    turn: number,
+    brake = false,
+    sprint = false
+  ) => {
+    engineRef.current?.setVirtualInput(forward, turn, brake, sprint);
+  };
+
+  const handleJump = () => {
+    engineRef.current?.triggerJump();
   };
 
   return (
@@ -138,11 +155,11 @@ export default function App() {
         className="fixed inset-0 h-full w-full cursor-grab active:cursor-grabbing"
       />
 
-      {/* Semantic DOM HUD Overlay & Collapsible Bottom Dock */}
+      {/* Semantic DOM HUD Overlay, Mobile Touch Controller & Collapsible Bottom Dock */}
       <ControlOverlay
         hud={hud}
-        timeOfDay={timeOfDay}
-        weather={weather}
+        timeOfDay={hud.timeOfDay}
+        weather={hud.weather}
         cameraMode={cameraMode}
         outfit={outfit}
         isMuted={isMuted}
@@ -150,9 +167,11 @@ export default function App() {
         onSpawnVehicle={handleSpawnVehicle}
         onHonkHorn={handleHonkHorn}
         onContextAction={handleContextAction}
+        onBuyShopItem={handleBuyShopItem}
         onStartMission={handleStartMission}
         onCancelMission={handleCancelMission}
         onChangeTimeOfDay={handleChangeTimeOfDay}
+        onToggleAutoTime={handleToggleAutoTime}
         onChangeWeather={handleChangeWeather}
         onChangeOutfit={handleChangeOutfit}
         onChangeCamera={handleChangeCamera}
@@ -160,6 +179,7 @@ export default function App() {
         onTeleport={handleTeleport}
         onToggleMute={handleToggleMute}
         onVirtualControl={handleVirtualControl}
+        onJump={handleJump}
       />
     </main>
   );

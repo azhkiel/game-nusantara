@@ -7,10 +7,18 @@ class SoundManager {
   private lastSirenTick: number = 0;
   private sirenPhase: number = 0;
 
+  // Continuous Ambient Rain Sound (Suara Latar Rintik Hujan)
+  private isRainActive: boolean = false;
+  private rainSource: AudioBufferSourceNode | null = null;
+  private rainMasterGain: GainNode | null = null;
+
   private ensureContext(): AudioContext | null {
     if (this.muted) return null;
     if (!this.ctx && typeof window !== 'undefined') {
-      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const AudioCtx =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext: typeof AudioContext })
+          .webkitAudioContext;
       if (AudioCtx) {
         this.ctx = new AudioCtx();
       }
@@ -18,7 +26,111 @@ class SoundManager {
     if (this.ctx && this.ctx.state === 'suspended') {
       this.ctx.resume().catch(() => {});
     }
+    if (this.ctx && this.isRainActive && !this.rainSource) {
+      this.initRainLoop(this.ctx);
+    }
     return this.ctx;
+  }
+
+  private initRainLoop(ctx: AudioContext) {
+    if (this.rainSource) return;
+
+    // Create a 3.5-second seamless stereo buffer with warm pink-noise rain wash + distinct raindrop patters ("rintik-rintik")
+    const sampleRate = ctx.sampleRate;
+    const length = Math.floor(sampleRate * 3.5);
+    const buffer = ctx.createBuffer(2, length, sampleRate);
+
+    for (let ch = 0; ch < 2; ch++) {
+      const data = buffer.getChannelData(ch);
+      let b0 = 0;
+      let b1 = 0;
+      let b2 = 0;
+      let dropletEnv = 0;
+      let dropletPhase = 0;
+      let dropletFreq = 2200;
+
+      for (let i = 0; i < length; i++) {
+        const white = Math.random() * 2 - 1;
+        // Kellet's pink-noise filter approximation for natural rain wash
+        b0 = 0.99765 * b0 + white * 0.099046;
+        b1 = 0.963 * b1 + white * 0.2965164;
+        b2 = 0.57 * b2 + white * 1.0526913;
+        const pink = (b0 + b1 + b2 + white * 0.1848) * 0.08;
+
+        // Random individual raindrop patters ("rintik hujan")
+        if (dropletEnv <= 0.001 && Math.random() < 0.0028) {
+          dropletEnv = 0.35 + Math.random() * 0.45;
+          dropletFreq = 1650 + Math.random() * 1900;
+          dropletPhase = 0;
+        }
+
+        let droplet = 0;
+        if (dropletEnv > 0.001) {
+          dropletPhase += (dropletFreq * Math.PI * 2) / sampleRate;
+          droplet = (Math.sin(dropletPhase) * 0.5 + white * 0.5) * dropletEnv * 0.22;
+          dropletEnv *= 0.992;
+        }
+
+        data[i] = pink + droplet;
+      }
+    }
+
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.loop = true;
+
+    // Bandpass + Lowpass shaping for realistic outdoor rain on asphalt & foliage
+    const lowpass = ctx.createBiquadFilter();
+    lowpass.type = 'lowpass';
+    lowpass.frequency.setValueAtTime(1850, ctx.currentTime);
+
+    const highpass = ctx.createBiquadFilter();
+    highpass.type = 'highpass';
+    highpass.frequency.setValueAtTime(240, ctx.currentTime);
+
+    const masterGain = ctx.createGain();
+    const targetVol = this.isRainActive && !this.muted ? 0.22 : 0.0001;
+    masterGain.gain.setValueAtTime(0.0001, ctx.currentTime);
+    masterGain.gain.setTargetAtTime(targetVol, ctx.currentTime, 0.3);
+
+    source.connect(highpass);
+    highpass.connect(lowpass);
+    lowpass.connect(masterGain);
+    masterGain.connect(ctx.destination);
+
+    source.start();
+    this.rainSource = source;
+    this.rainMasterGain = masterGain;
+  }
+
+  public setRainAmbience(active: boolean) {
+    this.isRainActive = active;
+    if (active && !this.muted) {
+      const ctx = this.ensureContext();
+      if (ctx) {
+        if (!this.rainSource) {
+          this.initRainLoop(ctx);
+        } else if (this.rainMasterGain) {
+          this.rainMasterGain.gain.setTargetAtTime(0.22, ctx.currentTime, 0.28);
+        }
+      }
+    } else if (this.ctx && this.rainMasterGain) {
+      this.rainMasterGain.gain.setTargetAtTime(0.0001, this.ctx.currentTime, 0.25);
+    }
+  }
+
+  public setMuted(nextMuted: boolean) {
+    this.muted = nextMuted;
+    if (this.ctx && this.rainMasterGain) {
+      const targetVol = this.isRainActive && !this.muted ? 0.22 : 0.0001;
+      this.rainMasterGain.gain.setTargetAtTime(
+        targetVol,
+        this.ctx.currentTime,
+        0.18
+      );
+    } else if (!this.muted && this.isRainActive) {
+      this.setRainAmbience(true);
+    }
   }
 
   public playTeloletHorn(isBusOrAngkot: boolean = true) {
@@ -204,3 +316,4 @@ class SoundManager {
 }
 
 export const soundFX = new SoundManager();
+

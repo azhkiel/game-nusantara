@@ -20,6 +20,7 @@ import {
   LogIn,
   LogOut,
   CheckCircle2,
+  Gamepad2,
 } from 'lucide-react';
 import {
   CameraMode,
@@ -30,6 +31,7 @@ import {
   WeatherType,
 } from '../types/game';
 import { MISSIONS, VEHICLE_SPECS } from '../three/worldData';
+import { MobileController } from './MobileController';
 
 interface ControlOverlayProps {
   hud: HudState;
@@ -42,19 +44,39 @@ interface ControlOverlayProps {
   onSpawnVehicle: (type: VehicleType) => void;
   onHonkHorn: () => void;
   onContextAction: () => void;
+  onBuyShopItem: (spotId: string, itemId: string) => void;
   onStartMission: (id: string) => void;
   onCancelMission: () => void;
   onChangeTimeOfDay: (time: TimeOfDay) => void;
+  onToggleAutoTime: (enabled: boolean) => void;
   onChangeWeather: (weather: WeatherType) => void;
   onChangeOutfit: (outfit: OutfitStyle) => void;
   onChangeCamera: (mode: CameraMode) => void;
   onClearWanted: () => void;
   onTeleport: (x: number, z: number, label: string) => void;
   onToggleMute: () => void;
-  onVirtualControl: (forward: number, turn: number, brake?: boolean) => void;
+  onVirtualControl: (
+    forward: number,
+    turn: number,
+    brake?: boolean,
+    sprint?: boolean
+  ) => void;
+  onJump: () => void;
 }
 
 type DockTab = 'kendaraan' | 'misi' | 'teleport' | 'suasana';
+
+const detectMobileDevice = (): boolean => {
+  if (typeof window === 'undefined') return false;
+  const coarsePointer =
+    window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+  const uaMobile =
+    /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
+      navigator.userAgent
+    );
+  const narrowScreen = window.innerWidth < 860;
+  return Boolean(coarsePointer || uaMobile || narrowScreen);
+};
 
 export const ControlOverlay: React.FC<ControlOverlayProps> = ({
   hud,
@@ -67,9 +89,11 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
   onSpawnVehicle,
   onHonkHorn,
   onContextAction,
+  onBuyShopItem,
   onStartMission,
   onCancelMission,
   onChangeTimeOfDay,
+  onToggleAutoTime,
   onChangeWeather,
   onChangeOutfit,
   onChangeCamera,
@@ -77,23 +101,51 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
   onTeleport,
   onToggleMute,
   onVirtualControl,
+  onJump,
 }) => {
-  const [isDockCollapsed, setIsDockCollapsed] = useState(false);
+  const [isMobileMode, setIsMobileMode] = useState<boolean>(() =>
+    detectMobileDevice()
+  );
+  const [isDockCollapsed, setIsDockCollapsed] = useState<boolean>(() =>
+    detectMobileDevice()
+  );
   const [activeTab, setActiveTab] = useState<DockTab>('kendaraan');
 
-  // Keyboard shortcut 'H' to collapse/expand bottom dock
+  // Auto-detect mobile on resize or first touch interaction + Keyboard shortcut 'H'
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
       if (e.code === 'KeyH' && !e.repeat) {
         setIsDockCollapsed((prev) => !prev);
       }
     };
+
+    const handleTouchDetect = () => {
+      setIsMobileMode((prev) => {
+        if (!prev) {
+          setIsDockCollapsed(true);
+        }
+        return true;
+      });
+    };
+
+    const handleResize = () => {
+      if (detectMobileDevice()) {
+        setIsMobileMode(true);
+      }
+    };
+
     window.addEventListener('keydown', handleKey);
-    return () => window.removeEventListener('keydown', handleKey);
+    window.addEventListener('touchstart', handleTouchDetect, { passive: true });
+    window.addEventListener('resize', handleResize);
+    return () => {
+      window.removeEventListener('keydown', handleKey);
+      window.removeEventListener('touchstart', handleTouchDetect);
+      window.removeEventListener('resize', handleResize);
+    };
   }, []);
 
-  // Calculate Minimap Radar dot positions (mapped from [-140..140] to [0..100])
-  const mapCoord = (val: number) => Math.max(6, Math.min(94, ((val + 140) / 280) * 100));
+  // Calculate Minimap Radar dot positions (mapped from [-155..155] to [0..100])
+  const mapCoord = (val: number) => Math.max(4, Math.min(96, ((val + 155) / 310) * 100));
   const playerMapX = mapCoord(hud.playerCoords.x);
   const playerMapY = mapCoord(hud.playerCoords.z);
 
@@ -106,8 +158,25 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
           {/* Interactive SVG Minimap Radar */}
           <div className="relative h-20 w-20 shrink-0 overflow-hidden rounded-lg bg-slate-900 border border-slate-700">
             <svg viewBox="0 0 100 100" className="h-full w-full">
-              {/* Expanded 5x5 Road Grid ([-120, -60, 0, 60, 120]) */}
+              {/* Background + Outer River Valleys (Sungai Kalimas East & South) */}
               <rect x="0" y="0" width="100" height="100" fill="#0f172a" />
+              <line
+                x1={mapCoord(148)}
+                y1={mapCoord(-150)}
+                x2={mapCoord(148)}
+                y2={mapCoord(150)}
+                stroke="#0284c7"
+                strokeWidth="4"
+              />
+              <line
+                x1={mapCoord(-150)}
+                y1={mapCoord(148)}
+                x2={mapCoord(150)}
+                y2={mapCoord(148)}
+                stroke="#0284c7"
+                strokeWidth="4"
+              />
+              {/* Expanded 5x5 Road Grid ([-120, -60, 0, 60, 120]) */}
               {[-120, -60, 60, 120].map((r) => (
                 <React.Fragment key={r}>
                   <line
@@ -116,7 +185,7 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
                     x2={mapCoord(r)}
                     y2={mapCoord(120)}
                     stroke="#334155"
-                    strokeWidth="2.5"
+                    strokeWidth="2.3"
                   />
                   <line
                     x1={mapCoord(-120)}
@@ -124,11 +193,11 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
                     x2={mapCoord(120)}
                     y2={mapCoord(r)}
                     stroke="#334155"
-                    strokeWidth="2.5"
+                    strokeWidth="2.3"
                   />
                 </React.Fragment>
               ))}
-              {/* Dedicated Park & Campus Blocks: Monas (-90,-30), Surabaya (90,30), Taman Kota (-30,90), Sekolah (30,90) */}
+              {/* Dedicated Park, Forest/River & Campus Blocks: Monas (-90,-30), Surabaya (90,30), Hutan & Sungai (-90,90), Taman Kota (-30,90), Sekolah (30,90) */}
               <rect
                 x={mapCoord(-111)}
                 y={mapCoord(-51)}
@@ -148,6 +217,25 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
                 stroke="#22c55e"
                 strokeWidth="0.8"
                 rx="1.5"
+              />
+              {/* Hutan Wisata & Sungai Alami Block (-90, 90) */}
+              <rect
+                x={mapCoord(-111)}
+                y={mapCoord(69)}
+                width={mapCoord(-69) - mapCoord(-111)}
+                height={mapCoord(111) - mapCoord(69)}
+                fill="#064e3b"
+                stroke="#38bdf8"
+                strokeWidth="0.9"
+                rx="1.5"
+              />
+              <line
+                x1={mapCoord(-90)}
+                y1={mapCoord(69)}
+                x2={mapCoord(-90)}
+                y2={mapCoord(111)}
+                stroke="#38bdf8"
+                strokeWidth="2"
               />
               <rect
                 x={mapCoord(-51)}
@@ -170,16 +258,17 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
                 rx="1.5"
               />
               {/* Main Boulevard Axes (X=0, Z=0) */}
-              <line x1="50" y1={mapCoord(-120)} x2="50" y2={mapCoord(120)} stroke="#475569" strokeWidth="3.5" />
-              <line x1={mapCoord(-120)} y1="50" x2={mapCoord(120)} y2="50" stroke="#475569" strokeWidth="3.5" />
+              <line x1="50" y1={mapCoord(-120)} x2="50" y2={mapCoord(150)} stroke="#475569" strokeWidth="3.2" />
+              <line x1={mapCoord(-120)} y1="50" x2={mapCoord(150)} y2="50" stroke="#475569" strokeWidth="3.2" />
               {/* Taman Tugu Monas West Landmark (-90, -30) */}
-              <circle cx={mapCoord(-90)} cy={mapCoord(-30)} r="4.5" fill="#f59e0b" stroke="#fef08a" strokeWidth="1" />
+              <circle cx={mapCoord(-90)} cy={mapCoord(-30)} r="4" fill="#f59e0b" stroke="#fef08a" strokeWidth="1" />
               {/* Taman Tugu Surabaya East Landmark (90, 30) */}
-              <circle cx={mapCoord(90)} cy={mapCoord(30)} r="4.5" fill="#10b981" stroke="#facc15" strokeWidth="1" />
-              {/* Taman Kota Nusantara (-30, 90) & SMA Negeri 1 Nusantara (30, 90) */}
-              <circle cx={mapCoord(-30)} cy={mapCoord(90)} r="3.8" fill="#4ade80" stroke="#ffffff" strokeWidth="0.8" />
-              <circle cx={mapCoord(30)} cy={mapCoord(90)} r="3.8" fill="#38bdf8" stroke="#fef08a" strokeWidth="0.8" />
-              {/* Interactable Spots */}
+              <circle cx={mapCoord(90)} cy={mapCoord(30)} r="4" fill="#10b981" stroke="#facc15" strokeWidth="1" />
+              {/* Hutan & Sungai (-90, 90), Taman Kota (-30, 90) & SMA Negeri 1 (30, 90) */}
+              <circle cx={mapCoord(-90)} cy={mapCoord(90)} r="3.5" fill="#06b6d4" stroke="#a7f3d0" strokeWidth="0.8" />
+              <circle cx={mapCoord(-30)} cy={mapCoord(90)} r="3.5" fill="#4ade80" stroke="#ffffff" strokeWidth="0.8" />
+              <circle cx={mapCoord(30)} cy={mapCoord(90)} r="3.5" fill="#38bdf8" stroke="#fef08a" strokeWidth="0.8" />
+              {/* Interactable Warung & Kios Spots */}
               <circle cx={mapCoord(-32)} cy={mapCoord(9.2)} r="2.8" fill="#22c55e" />
               <circle cx={mapCoord(32)} cy={mapCoord(-9.2)} r="2.8" fill="#22c55e" />
               <circle cx={mapCoord(-9.5)} cy={mapCoord(-34)} r="2.8" fill="#38bdf8" />
@@ -190,7 +279,7 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
                   key={idx}
                   cx={mapCoord(tv.x)}
                   cy={mapCoord(tv.z)}
-                  r="1.7"
+                  r="1.6"
                   fill={tv.type === 'polisi' ? '#ef4444' : '#cbd5e1'}
                 />
               ))}
@@ -219,7 +308,7 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
             </span>
           </div>
 
-          {/* Player Stats: Brand, District, Money, Health, Wanted Stars */}
+          {/* Player Stats: Brand, District, Live Clock, Money, Health, Wanted Stars */}
           <div className="flex flex-col gap-1">
             <div className="flex items-center gap-2">
               <h1
@@ -232,6 +321,34 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
               <span className="text-xs font-medium text-amber-400 whitespace-nowrap">
                 {hud.districtName}
               </span>
+              <span className="text-slate-600">·</span>
+              <button
+                onClick={() => onToggleAutoTime(!hud.autoTime)}
+                title="Klik untuk aktifkan/kunci siklus waktu otomatis"
+                className="flex items-center gap-1 rounded bg-slate-900 border border-slate-700 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-sky-300 hover:border-sky-400 whitespace-nowrap cursor-pointer"
+              >
+                <span>{hud.clockTimeText}</span>
+                <span className="text-amber-300 uppercase">({timeOfDay})</span>
+                {hud.autoTime && (
+                  <span className="ml-0.5 text-[9px] text-emerald-400">AUTO</span>
+                )}
+              </button>
+              <button
+                onClick={() => {
+                  const nextMobile = !isMobileMode;
+                  setIsMobileMode(nextMobile);
+                  if (nextMobile) setIsDockCollapsed(true);
+                }}
+                title="Tampilkan / Sembunyikan Kontroler Layar Sentuh Mobile"
+                className={`flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-bold whitespace-nowrap cursor-pointer ${
+                  isMobileMode
+                    ? 'bg-amber-500 text-slate-950 border-amber-300'
+                    : 'bg-slate-900 text-slate-300 border-slate-700 hover:border-amber-400'
+                }`}
+              >
+                <Gamepad2 className="h-3 w-3" />
+                <span>{isMobileMode ? 'Kontrol HP: ON' : 'Kontrol HP'}</span>
+              </button>
             </div>
 
             {/* Rupiah Balance + Speedometer */}
@@ -297,8 +414,8 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
           </div>
         </div>
 
-        {/* Top-Center: Active Mission Banner OR Context Prompt / Notification */}
-        <div className="flex flex-col items-center gap-2 max-w-md">
+        {/* Top-Center: Active Mission Banner OR Interactive Warung / Kios Menu & Notification */}
+        <div className="flex flex-col items-center gap-2 max-w-lg">
           {hud.activeMission && (
             <div className="pointer-events-auto flex items-center justify-between gap-4 rounded-xl bg-slate-950/95 border border-amber-500/60 px-4 py-2.5 shadow-xl">
               <div>
@@ -324,13 +441,13 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
             </div>
           )}
 
-          {/* Contextual Street Action Prompt (Enter Vehicle / Buy Food at Warung) */}
+          {/* Contextual Street Action Prompt (Enter Vehicle + Interactive Warung / Kios Menu) */}
           {(hud.nearbyVehiclePrompt || hud.nearbySpot) && (
-            <div className="pointer-events-auto flex items-center gap-3 rounded-xl bg-slate-950/95 border border-emerald-500/60 px-4 py-2 shadow-xl">
+            <div className="pointer-events-auto flex flex-col gap-2 rounded-xl bg-slate-950/95 border border-emerald-500/70 p-3 shadow-2xl">
               {hud.nearbyVehiclePrompt && !hud.inVehicle && (
                 <button
                   onClick={onToggleEnterExit}
-                  className="flex items-center gap-2 rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-bold text-slate-950 hover:bg-amber-400 whitespace-nowrap shrink-0 cursor-pointer"
+                  className="flex items-center justify-center gap-2 rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-bold text-slate-950 hover:bg-amber-400 whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   <LogIn className="h-3.5 w-3.5" />
                   <span>Tekan [F] Naik {hud.nearbyVehiclePrompt}</span>
@@ -338,16 +455,69 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
               )}
 
               {hud.nearbySpot && (
-                <button
-                  onClick={onContextAction}
-                  className="flex items-center gap-2 rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-bold text-slate-950 hover:bg-emerald-400 whitespace-nowrap shrink-0 cursor-pointer"
-                >
-                  <Utensils className="h-3.5 w-3.5" />
-                  <span>
-                    [E] {hud.nearbySpot.actionLabel} (Rp{' '}
-                    {hud.nearbySpot.cost.toLocaleString('id-ID')})
-                  </span>
-                </button>
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center justify-between gap-3 border-b border-slate-800 pb-1.5">
+                    <div className="flex items-center gap-1.5">
+                      <Utensils className="h-3.5 w-3.5 text-emerald-400" />
+                      <span className="text-xs font-bold text-white">
+                        {hud.nearbySpot.name}
+                      </span>
+                    </div>
+                    <span className="text-[10px] font-semibold text-emerald-300">
+                      Pilih Menu [1 / 2 / 3] atau [E]
+                    </span>
+                  </div>
+
+                  {/* Interactive Item List for Warung Pecel Lele / Kios Pinggir Jalan */}
+                  {hud.nearbySpot.items && hud.nearbySpot.items.length > 0 ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5">
+                      {hud.nearbySpot.items.map((item, idx) => (
+                        <button
+                          key={item.id}
+                          onClick={() => onBuyShopItem(hud.nearbySpot!.id, item.id)}
+                          className="flex flex-col items-start justify-between rounded-lg bg-slate-900 hover:bg-emerald-950/80 border border-slate-700 hover:border-emerald-400 p-2 text-left transition-colors cursor-pointer"
+                        >
+                          <div className="flex w-full items-center justify-between gap-1">
+                            <span className="rounded bg-emerald-500/20 px-1.5 py-0.5 font-mono text-[10px] font-bold text-emerald-300">
+                              [{idx + 1}]
+                            </span>
+                            {item.healAmount > 0 ? (
+                              <span className="font-mono text-[10px] font-bold text-rose-400">
+                                +{item.healAmount} Darah
+                              </span>
+                            ) : (
+                              <span className="font-mono text-[10px] font-bold text-amber-300">
+                                Layanan
+                              </span>
+                            )}
+                          </div>
+                          <span className="mt-1 text-xs font-bold text-white line-clamp-1">
+                            {item.name}
+                          </span>
+                          <span className="text-[10px] text-slate-400 line-clamp-1">
+                            {item.description}
+                          </span>
+                          <span className="mt-1 font-mono text-[11px] font-bold text-emerald-400 tabular-nums">
+                            {item.price >= 0
+                              ? `Rp ${item.price.toLocaleString('id-ID')}`
+                              : `+Rp ${Math.abs(item.price).toLocaleString('id-ID')}`}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <button
+                      onClick={onContextAction}
+                      className="flex items-center justify-center gap-2 rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-bold text-slate-950 hover:bg-emerald-400 whitespace-nowrap shrink-0 cursor-pointer"
+                    >
+                      <Utensils className="h-3.5 w-3.5" />
+                      <span>
+                        [E] {hud.nearbySpot.actionLabel} (Rp{' '}
+                        {hud.nearbySpot.cost.toLocaleString('id-ID')})
+                      </span>
+                    </button>
+                  )}
+                </div>
               )}
             </div>
           )}
@@ -365,6 +535,19 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
           )}
         </div>
       </div>
+
+      {/* ON-SCREEN DUAL-THUMB MOBILE CONTROLLER (Automatically active when mobile/touch detected) */}
+      {isMobileMode && (
+        <MobileController
+          hud={hud}
+          onVirtualControl={onVirtualControl}
+          onJump={onJump}
+          onToggleEnterExit={onToggleEnterExit}
+          onHonkHorn={onHonkHorn}
+          onContextAction={onContextAction}
+          onSpawnVehicle={onSpawnVehicle}
+        />
+      )}
 
       {/* UNIFIED COLLAPSIBLE BOTTOM CONTROL DOCK (100% Unobstructed Center Viewport) */}
       <div
@@ -452,13 +635,13 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
               </button>
             </div>
 
-            {/* Instant Gameplay Actions: Tugu Surabaya Quick Teleport, Rain Toggle, Enter/Exit Vehicle, Klakson Telolet, Audio */}
+            {/* Instant Gameplay Actions: Warung Pecel Lele, Hutan & Sungai, Rain Toggle, Enter/Exit Vehicle, Klakson Telolet, Audio */}
             <div className="flex items-center gap-2">
               <button
                 onClick={() =>
                   onChangeWeather(weather === 'hujan' ? 'cerah' : 'hujan')
                 }
-                className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer ${
+                className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer ${
                   weather === 'hujan'
                     ? 'bg-sky-500 text-slate-950 border-sky-400'
                     : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-sky-300'
@@ -478,19 +661,19 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
               </button>
 
               <button
-                onClick={() => onTeleport(-90, -3.5, 'Taman Tugu Monas (Lahan Barat)')}
-                className="flex items-center gap-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/50 px-2.5 py-1.5 text-xs font-semibold text-amber-300 whitespace-nowrap shrink-0 cursor-pointer"
+                onClick={() => onTeleport(-32, 3.5, 'Warung Pecel Lele Cak Har')}
+                className="flex items-center gap-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/50 px-2.5 py-1.5 text-xs font-semibold text-emerald-300 whitespace-nowrap shrink-0 cursor-pointer"
               >
-                <Navigation className="h-3.5 w-3.5" />
-                <span>Ke Tugu Monas</span>
+                <Utensils className="h-3.5 w-3.5" />
+                <span>Ke Warung Pecel Lele</span>
               </button>
 
               <button
-                onClick={() => onTeleport(90, 3.5, 'Taman Tugu Surabaya (Lahan Timur)')}
-                className="flex items-center gap-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/50 px-2.5 py-1.5 text-xs font-semibold text-emerald-300 whitespace-nowrap shrink-0 cursor-pointer"
+                onClick={() => onTeleport(-90, 63.5, 'Hutan Wisata & Sungai Alami')}
+                className="flex items-center gap-1.5 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/50 px-2.5 py-1.5 text-xs font-semibold text-cyan-300 whitespace-nowrap shrink-0 cursor-pointer"
               >
                 <Navigation className="h-3.5 w-3.5" />
-                <span>Ke Tugu Surabaya</span>
+                <span>Ke Hutan & Sungai</span>
               </button>
 
               <button
@@ -500,22 +683,22 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
                 {hud.inVehicle ? (
                   <>
                     <LogOut className="h-3.5 w-3.5 text-rose-400" />
-                    <span>Turun Kendaraan [F]</span>
+                    <span>Turun [F]</span>
                   </>
                 ) : (
                   <>
                     <LogIn className="h-3.5 w-3.5 text-emerald-400" />
-                    <span>Naik Kendaraan [F]</span>
+                    <span>Naik [F]</span>
                   </>
                 )}
               </button>
 
               <button
                 onClick={onHonkHorn}
-                className="flex items-center gap-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/50 px-3 py-1.5 text-xs font-semibold text-amber-300 whitespace-nowrap shrink-0 cursor-pointer"
+                className="flex items-center gap-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/50 px-2.5 py-1.5 text-xs font-semibold text-amber-300 whitespace-nowrap shrink-0 cursor-pointer"
               >
                 <Megaphone className="h-3.5 w-3.5" />
-                <span>Klakson Telolet [G]</span>
+                <span>Telolet [G]</span>
               </button>
 
               <button
@@ -649,16 +832,16 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
             {activeTab === 'teleport' && (
               <div className="flex flex-wrap items-center gap-2">
                 {[
+                  { label: 'Hutan Wisata & Sungai Alami', x: -90, z: 63.5, desc: 'Air Terjun Mini, Jembatan Kayu & Warung Sungai' },
+                  { label: 'Jembatan Sungai Kalimas Selatan', x: -3.5, z: 135, desc: 'Sungai Lebar, Perahu Kayu & Hutan Lembah' },
+                  { label: 'Warung Pecel Lele Cak Har', x: -32, z: 3.5, desc: 'Beli Es Teh Manis & Nasi Pecel (+Darah)' },
+                  { label: 'Warung Bakso Urat Solo', x: 32, z: -3.5, desc: 'Beli Es Jeruk, Bakso Urat & Mie Ayam' },
                   { label: 'Taman Kota Nusantara', x: -30, z: 63.5, desc: 'Gazebo Joglo, Kolam Koi & Playground' },
-                  { label: 'SMA Negeri 1 Nusantara (Sekolah)', x: 30, z: 63.5, desc: 'Gedung Sekolah, Lapangan Basket & Upacara' },
+                  { label: 'SMA Negeri 1 Nusantara (Sekolah)', x: 30, z: 63.5, desc: 'Kantin Sekolah, Lapangan Basket & Upacara' },
                   { label: 'Taman Tugu Surabaya (Sura & Baya)', x: 90, z: 3.5, desc: 'Lahan Taman Khusus di Timur Kota' },
                   { label: 'Lapangan Taman Tugu Monas', x: -90, z: -3.5, desc: 'Lahan Taman Khusus di Barat Kota' },
-                  { label: 'Warung Pecel Lele Cak Har', x: -32, z: 3.5, desc: 'Isi Darah & Stamina' },
-                  { label: 'Minimarket Indoalfa 24 Jam', x: -3.5, z: -34, desc: 'Kopi & Tarik ATM' },
+                  { label: 'Minimarket Indoalfa 24 Jam', x: -3.5, z: -34, desc: 'Kopi Dingin, Roti & Tarik ATM' },
                   { label: 'Bengkel Cat & Cuci Steam', x: 3.5, z: 36, desc: 'Hapus Bintang Polisi' },
-                  { label: 'Warung Bakso Urat Solo', x: 32, z: -3.5, desc: 'Kuliner Malam' },
-                  { label: 'Masjid Agung Nusantara', x: 32, z: -63.5, desc: 'Kubah Hijau Ikonik' },
-                  { label: 'Gapura Merah Putih Selatan', x: -3.5, z: 112, desc: 'Gerbang Kampung Merdeka' },
                 ].map((loc) => (
                   <button
                     key={loc.label}
@@ -677,50 +860,71 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
             )}
 
             {activeTab === 'suasana' && (
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                {/* Time of Day Selector (Matahari & Bulan) */}
-                <div className="flex items-center gap-1.5">
+              <div className="flex flex-wrap items-center justify-between gap-2.5">
+                {/* 4-Phase Time of Day Selector (Pagi, Siang, Sore, Malam) + Auto Cycle Toggle */}
+                <div className="flex flex-wrap items-center gap-1.5">
                   <span className="text-xs font-semibold text-slate-400 whitespace-nowrap">
-                    Langit:
+                    Waktu ({hud.clockTimeText}):
                   </span>
                   <div className="flex items-center gap-1 rounded-lg bg-slate-900 p-1">
                     <button
-                      onClick={() => onChangeTimeOfDay('siang')}
-                      className={`flex items-center gap-1 rounded px-2.5 py-1 text-xs font-medium whitespace-nowrap shrink-0 cursor-pointer ${
-                        timeOfDay === 'siang'
-                          ? 'bg-sky-500 text-slate-950 font-bold'
+                      onClick={() => onChangeTimeOfDay('pagi')}
+                      className={`flex items-center gap-1 rounded px-2 py-1 text-xs font-medium whitespace-nowrap shrink-0 cursor-pointer ${
+                        timeOfDay === 'pagi'
+                          ? 'bg-amber-300 text-slate-950 font-bold'
                           : 'text-slate-300 hover:text-white'
                       }`}
                     >
                       <Sun className="h-3.5 w-3.5" />
-                      <span>Siang (Matahari)</span>
+                      <span>Pagi</span>
                     </button>
                     <button
-                      onClick={() => onChangeTimeOfDay('senja')}
-                      className={`flex items-center gap-1 rounded px-2.5 py-1 text-xs font-medium whitespace-nowrap shrink-0 cursor-pointer ${
-                        timeOfDay === 'senja'
+                      onClick={() => onChangeTimeOfDay('siang')}
+                      className={`flex items-center gap-1 rounded px-2 py-1 text-xs font-medium whitespace-nowrap shrink-0 cursor-pointer ${
+                        timeOfDay === 'siang'
+                          ? 'bg-sky-400 text-slate-950 font-bold'
+                          : 'text-slate-300 hover:text-white'
+                      }`}
+                    >
+                      <Sun className="h-3.5 w-3.5" />
+                      <span>Siang</span>
+                    </button>
+                    <button
+                      onClick={() => onChangeTimeOfDay('sore')}
+                      className={`flex items-center gap-1 rounded px-2 py-1 text-xs font-medium whitespace-nowrap shrink-0 cursor-pointer ${
+                        timeOfDay === 'sore'
                           ? 'bg-orange-500 text-slate-950 font-bold'
                           : 'text-slate-300 hover:text-white'
                       }`}
                     >
                       <Sunset className="h-3.5 w-3.5" />
-                      <span>Senja Sore</span>
+                      <span>Sore</span>
                     </button>
                     <button
                       onClick={() => onChangeTimeOfDay('malam')}
-                      className={`flex items-center gap-1 rounded px-2.5 py-1 text-xs font-medium whitespace-nowrap shrink-0 cursor-pointer ${
+                      className={`flex items-center gap-1 rounded px-2 py-1 text-xs font-medium whitespace-nowrap shrink-0 cursor-pointer ${
                         timeOfDay === 'malam'
                           ? 'bg-indigo-500 text-white font-bold'
                           : 'text-slate-300 hover:text-white'
                       }`}
                     >
                       <Moon className="h-3.5 w-3.5" />
-                      <span>Malam (Bulan)</span>
+                      <span>Malam</span>
+                    </button>
+                    <button
+                      onClick={() => onToggleAutoTime(!hud.autoTime)}
+                      className={`ml-1 rounded px-2 py-1 text-[11px] font-bold whitespace-nowrap shrink-0 cursor-pointer border ${
+                        hud.autoTime
+                          ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300'
+                          : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      {hud.autoTime ? 'Otomatis: ON' : 'Otomatis: OFF'}
                     </button>
                   </div>
                 </div>
 
-                {/* Weather Selector (Cerah Berawan vs Hujan Deras) */}
+                {/* Weather Selector (Cerah Berawan vs Hujan Deras + Partikel & Suara Rintik) */}
                 <div className="flex items-center gap-1.5">
                   <span className="text-xs font-semibold text-slate-400 whitespace-nowrap">
                     Cuaca:
@@ -735,7 +939,7 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
                       }`}
                     >
                       <CloudSun className="h-3.5 w-3.5" />
-                      <span>Cerah Berawan</span>
+                      <span>Cerah</span>
                     </button>
                     <button
                       onClick={() => onChangeWeather('hujan')}
@@ -746,7 +950,7 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
                       }`}
                     >
                       <CloudRain className="h-3.5 w-3.5" />
-                      <span>Hujan Deras</span>
+                      <span>Hujan + Rintik</span>
                     </button>
                   </div>
                 </div>

@@ -1,0 +1,6 @@
+{
+  "name": "Nusantara Street 3D: Kota Raya",
+  "description": "Game open-world 3D bergaya GTA dengan nuansa khas Indonesia menggunakan Three.js — kendarai Bajaj, Angkot, dan Motor Ojol, jelajahi Monas hingga Warung Pecel Lele, dan selesaikan misi jalanan.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

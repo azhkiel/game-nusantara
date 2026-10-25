@@ -9,7 +9,8 @@ import {
   Sun,
   Sunset,
   Moon,
-  ShieldAlert,
+  CloudRain,
+  CloudSun,
   Utensils,
   Navigation,
   Sparkles,
@@ -26,12 +27,14 @@ import {
   OutfitStyle,
   TimeOfDay,
   VehicleType,
+  WeatherType,
 } from '../types/game';
 import { MISSIONS, VEHICLE_SPECS } from '../three/worldData';
 
 interface ControlOverlayProps {
   hud: HudState;
   timeOfDay: TimeOfDay;
+  weather: WeatherType;
   cameraMode: CameraMode;
   outfit: OutfitStyle;
   isMuted: boolean;
@@ -42,6 +45,7 @@ interface ControlOverlayProps {
   onStartMission: (id: string) => void;
   onCancelMission: () => void;
   onChangeTimeOfDay: (time: TimeOfDay) => void;
+  onChangeWeather: (weather: WeatherType) => void;
   onChangeOutfit: (outfit: OutfitStyle) => void;
   onChangeCamera: (mode: CameraMode) => void;
   onClearWanted: () => void;
@@ -55,6 +59,7 @@ type DockTab = 'kendaraan' | 'misi' | 'teleport' | 'suasana';
 export const ControlOverlay: React.FC<ControlOverlayProps> = ({
   hud,
   timeOfDay,
+  weather,
   cameraMode,
   outfit,
   isMuted,
@@ -65,6 +70,7 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
   onStartMission,
   onCancelMission,
   onChangeTimeOfDay,
+  onChangeWeather,
   onChangeOutfit,
   onChangeCamera,
   onClearWanted,
@@ -86,8 +92,8 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
     return () => window.removeEventListener('keydown', handleKey);
   }, []);
 
-  // Calculate Minimap Radar dot positions (mapped from [-90..90] to [0..100])
-  const mapCoord = (val: number) => Math.max(8, Math.min(92, ((val + 90) / 180) * 100));
+  // Calculate Minimap Radar dot positions (mapped from [-140..140] to [0..100])
+  const mapCoord = (val: number) => Math.max(6, Math.min(94, ((val + 140) / 280) * 100));
   const playerMapX = mapCoord(hud.playerCoords.x);
   const playerMapY = mapCoord(hud.playerCoords.z);
 
@@ -100,20 +106,94 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
           {/* Interactive SVG Minimap Radar */}
           <div className="relative h-20 w-20 shrink-0 overflow-hidden rounded-lg bg-slate-900 border border-slate-700">
             <svg viewBox="0 0 100 100" className="h-full w-full">
-              {/* Road crosshairs */}
+              {/* Expanded 5x5 Road Grid ([-120, -60, 0, 60, 120]) */}
               <rect x="0" y="0" width="100" height="100" fill="#0f172a" />
-              <rect x="20" y="20" width="60" height="60" fill="none" stroke="#334155" strokeWidth="3" />
-              <line x1="50" y1="0" x2="50" y2="100" stroke="#475569" strokeWidth="5" />
-              <line x1="0" y1="50" x2="100" y2="50" stroke="#475569" strokeWidth="5" />
-              {/* Monas Center Landmark */}
-              <circle cx="50" cy="50" r="6" fill="#f59e0b" />
-              {/* Tugu Surabaya East Landmark */}
-              <circle cx={mapCoord(48)} cy={mapCoord(0)} r="5" fill="#10b981" stroke="#facc15" strokeWidth="1" />
+              {[-120, -60, 60, 120].map((r) => (
+                <React.Fragment key={r}>
+                  <line
+                    x1={mapCoord(r)}
+                    y1={mapCoord(-120)}
+                    x2={mapCoord(r)}
+                    y2={mapCoord(120)}
+                    stroke="#334155"
+                    strokeWidth="2.5"
+                  />
+                  <line
+                    x1={mapCoord(-120)}
+                    y1={mapCoord(r)}
+                    x2={mapCoord(120)}
+                    y2={mapCoord(r)}
+                    stroke="#334155"
+                    strokeWidth="2.5"
+                  />
+                </React.Fragment>
+              ))}
+              {/* Dedicated Park & Campus Blocks: Monas (-90,-30), Surabaya (90,30), Taman Kota (-30,90), Sekolah (30,90) */}
+              <rect
+                x={mapCoord(-111)}
+                y={mapCoord(-51)}
+                width={mapCoord(-69) - mapCoord(-111)}
+                height={mapCoord(-9) - mapCoord(-51)}
+                fill="#14532d"
+                stroke="#22c55e"
+                strokeWidth="0.8"
+                rx="1.5"
+              />
+              <rect
+                x={mapCoord(69)}
+                y={mapCoord(9)}
+                width={mapCoord(111) - mapCoord(69)}
+                height={mapCoord(51) - mapCoord(9)}
+                fill="#14532d"
+                stroke="#22c55e"
+                strokeWidth="0.8"
+                rx="1.5"
+              />
+              <rect
+                x={mapCoord(-51)}
+                y={mapCoord(69)}
+                width={mapCoord(-9) - mapCoord(-51)}
+                height={mapCoord(111) - mapCoord(69)}
+                fill="#14532d"
+                stroke="#4ade80"
+                strokeWidth="0.8"
+                rx="1.5"
+              />
+              <rect
+                x={mapCoord(9)}
+                y={mapCoord(69)}
+                width={mapCoord(51) - mapCoord(9)}
+                height={mapCoord(111) - mapCoord(69)}
+                fill="#1e3a8a"
+                stroke="#60a5fa"
+                strokeWidth="0.8"
+                rx="1.5"
+              />
+              {/* Main Boulevard Axes (X=0, Z=0) */}
+              <line x1="50" y1={mapCoord(-120)} x2="50" y2={mapCoord(120)} stroke="#475569" strokeWidth="3.5" />
+              <line x1={mapCoord(-120)} y1="50" x2={mapCoord(120)} y2="50" stroke="#475569" strokeWidth="3.5" />
+              {/* Taman Tugu Monas West Landmark (-90, -30) */}
+              <circle cx={mapCoord(-90)} cy={mapCoord(-30)} r="4.5" fill="#f59e0b" stroke="#fef08a" strokeWidth="1" />
+              {/* Taman Tugu Surabaya East Landmark (90, 30) */}
+              <circle cx={mapCoord(90)} cy={mapCoord(30)} r="4.5" fill="#10b981" stroke="#facc15" strokeWidth="1" />
+              {/* Taman Kota Nusantara (-30, 90) & SMA Negeri 1 Nusantara (30, 90) */}
+              <circle cx={mapCoord(-30)} cy={mapCoord(90)} r="3.8" fill="#4ade80" stroke="#ffffff" strokeWidth="0.8" />
+              <circle cx={mapCoord(30)} cy={mapCoord(90)} r="3.8" fill="#38bdf8" stroke="#fef08a" strokeWidth="0.8" />
               {/* Interactable Spots */}
-              <circle cx={mapCoord(-30)} cy={mapCoord(26)} r="3" fill="#22c55e" />
-              <circle cx={mapCoord(30)} cy={mapCoord(-26)} r="3" fill="#22c55e" />
-              <circle cx={mapCoord(-32)} cy={mapCoord(-30)} r="3" fill="#38bdf8" />
-              <circle cx={mapCoord(34)} cy={mapCoord(32)} r="3" fill="#f97316" />
+              <circle cx={mapCoord(-32)} cy={mapCoord(9.2)} r="2.8" fill="#22c55e" />
+              <circle cx={mapCoord(32)} cy={mapCoord(-9.2)} r="2.8" fill="#22c55e" />
+              <circle cx={mapCoord(-9.5)} cy={mapCoord(-34)} r="2.8" fill="#38bdf8" />
+              <circle cx={mapCoord(9.5)} cy={mapCoord(36)} r="2.8" fill="#f97316" />
+              {/* Live Moving AI Traffic Blips */}
+              {hud.trafficCoords?.map((tv, idx) => (
+                <circle
+                  key={idx}
+                  cx={mapCoord(tv.x)}
+                  cy={mapCoord(tv.z)}
+                  r="1.7"
+                  fill={tv.type === 'polisi' ? '#ef4444' : '#cbd5e1'}
+                />
+              ))}
               {/* Active Mission Objective */}
               {hud.targetCoords && (
                 <circle
@@ -372,11 +452,42 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
               </button>
             </div>
 
-            {/* Instant Gameplay Actions: Tugu Surabaya Quick Teleport, Enter/Exit Vehicle, Klakson Telolet, Audio */}
+            {/* Instant Gameplay Actions: Tugu Surabaya Quick Teleport, Rain Toggle, Enter/Exit Vehicle, Klakson Telolet, Audio */}
             <div className="flex items-center gap-2">
               <button
-                onClick={() => onTeleport(33, 0, 'Bundaran Tugu Surabaya (Sura & Baya)')}
-                className="flex items-center gap-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/50 px-3 py-1.5 text-xs font-semibold text-emerald-300 whitespace-nowrap shrink-0 cursor-pointer"
+                onClick={() =>
+                  onChangeWeather(weather === 'hujan' ? 'cerah' : 'hujan')
+                }
+                className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer ${
+                  weather === 'hujan'
+                    ? 'bg-sky-500 text-slate-950 border-sky-400'
+                    : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-sky-300'
+                }`}
+              >
+                {weather === 'hujan' ? (
+                  <>
+                    <CloudRain className="h-3.5 w-3.5" />
+                    <span>Hujan Aktif</span>
+                  </>
+                ) : (
+                  <>
+                    <CloudSun className="h-3.5 w-3.5" />
+                    <span>Turunkan Hujan</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                onClick={() => onTeleport(-90, -3.5, 'Taman Tugu Monas (Lahan Barat)')}
+                className="flex items-center gap-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/50 px-2.5 py-1.5 text-xs font-semibold text-amber-300 whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <Navigation className="h-3.5 w-3.5" />
+                <span>Ke Tugu Monas</span>
+              </button>
+
+              <button
+                onClick={() => onTeleport(90, 3.5, 'Taman Tugu Surabaya (Lahan Timur)')}
+                className="flex items-center gap-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/50 px-2.5 py-1.5 text-xs font-semibold text-emerald-300 whitespace-nowrap shrink-0 cursor-pointer"
               >
                 <Navigation className="h-3.5 w-3.5" />
                 <span>Ke Tugu Surabaya</span>
@@ -538,14 +649,16 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
             {activeTab === 'teleport' && (
               <div className="flex flex-wrap items-center gap-2">
                 {[
-                  { label: 'Bundaran Tugu Surabaya (Sura & Baya)', x: 33, z: 0, desc: 'Patung Sura & Baya + Tugu Pahlawan' },
-                  { label: 'Bundaran Tugu Monas', x: 0, z: 22, desc: 'Ikon Ibu Kota & Taman' },
-                  { label: 'Warung Pecel Lele Cak Har', x: -23, z: 24, desc: 'Isi Darah & Stamina' },
-                  { label: 'Minimarket Indoalfa 24 Jam', x: -24, z: -24, desc: 'Kopi & Tarik ATM' },
-                  { label: 'Bengkel Cat & Cuci Steam', x: 25, z: 32, desc: 'Hapus Bintang Polisi' },
-                  { label: 'Warung Bakso Urat Solo', x: 23, z: -23, desc: 'Kuliner Malam' },
-                  { label: 'Masjid Agung Nusantara', x: 24, z: -60, desc: 'Kubah Hijau Ikonik' },
-                  { label: 'Gapura Merah Putih Selatan', x: 0, z: 70, desc: 'Gerbang Kampung Merdeka' },
+                  { label: 'Taman Kota Nusantara', x: -30, z: 63.5, desc: 'Gazebo Joglo, Kolam Koi & Playground' },
+                  { label: 'SMA Negeri 1 Nusantara (Sekolah)', x: 30, z: 63.5, desc: 'Gedung Sekolah, Lapangan Basket & Upacara' },
+                  { label: 'Taman Tugu Surabaya (Sura & Baya)', x: 90, z: 3.5, desc: 'Lahan Taman Khusus di Timur Kota' },
+                  { label: 'Lapangan Taman Tugu Monas', x: -90, z: -3.5, desc: 'Lahan Taman Khusus di Barat Kota' },
+                  { label: 'Warung Pecel Lele Cak Har', x: -32, z: 3.5, desc: 'Isi Darah & Stamina' },
+                  { label: 'Minimarket Indoalfa 24 Jam', x: -3.5, z: -34, desc: 'Kopi & Tarik ATM' },
+                  { label: 'Bengkel Cat & Cuci Steam', x: 3.5, z: 36, desc: 'Hapus Bintang Polisi' },
+                  { label: 'Warung Bakso Urat Solo', x: 32, z: -3.5, desc: 'Kuliner Malam' },
+                  { label: 'Masjid Agung Nusantara', x: 32, z: -63.5, desc: 'Kubah Hijau Ikonik' },
+                  { label: 'Gapura Merah Putih Selatan', x: -3.5, z: 112, desc: 'Gerbang Kampung Merdeka' },
                 ].map((loc) => (
                   <button
                     key={loc.label}
@@ -564,11 +677,11 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
             )}
 
             {activeTab === 'suasana' && (
-              <div className="flex flex-wrap items-center justify-between gap-4">
-                {/* Time of Day Selector */}
-                <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                {/* Time of Day Selector (Matahari & Bulan) */}
+                <div className="flex items-center gap-1.5">
                   <span className="text-xs font-semibold text-slate-400 whitespace-nowrap">
-                    Waktu:
+                    Langit:
                   </span>
                   <div className="flex items-center gap-1 rounded-lg bg-slate-900 p-1">
                     <button
@@ -580,7 +693,7 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
                       }`}
                     >
                       <Sun className="h-3.5 w-3.5" />
-                      <span>Siang Terik</span>
+                      <span>Siang (Matahari)</span>
                     </button>
                     <button
                       onClick={() => onChangeTimeOfDay('senja')}
@@ -602,7 +715,38 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
                       }`}
                     >
                       <Moon className="h-3.5 w-3.5" />
-                      <span>Malam Hari</span>
+                      <span>Malam (Bulan)</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Weather Selector (Cerah Berawan vs Hujan Deras) */}
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs font-semibold text-slate-400 whitespace-nowrap">
+                    Cuaca:
+                  </span>
+                  <div className="flex items-center gap-1 rounded-lg bg-slate-900 p-1">
+                    <button
+                      onClick={() => onChangeWeather('cerah')}
+                      className={`flex items-center gap-1 rounded px-2.5 py-1 text-xs font-medium whitespace-nowrap shrink-0 cursor-pointer ${
+                        weather === 'cerah'
+                          ? 'bg-amber-400 text-slate-950 font-bold'
+                          : 'text-slate-300 hover:text-white'
+                      }`}
+                    >
+                      <CloudSun className="h-3.5 w-3.5" />
+                      <span>Cerah Berawan</span>
+                    </button>
+                    <button
+                      onClick={() => onChangeWeather('hujan')}
+                      className={`flex items-center gap-1 rounded px-2.5 py-1 text-xs font-medium whitespace-nowrap shrink-0 cursor-pointer ${
+                        weather === 'hujan'
+                          ? 'bg-sky-400 text-slate-950 font-bold'
+                          : 'text-slate-300 hover:text-white'
+                      }`}
+                    >
+                      <CloudRain className="h-3.5 w-3.5" />
+                      <span>Hujan Deras</span>
                     </button>
                   </div>
                 </div>

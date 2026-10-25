@@ -18,7 +18,10 @@ function finalizeColorTexture(
   return tex;
 }
 
-export function createRoadAsphaltTexture(maxAnisotropy: number): THREE.CanvasTexture {
+export function createRoadAsphaltTexture(
+  maxAnisotropy: number,
+  repeatLength = 4
+): THREE.CanvasTexture {
   const canvas = document.createElement('canvas');
   canvas.width = 512;
   canvas.height = 512;
@@ -29,26 +32,60 @@ export function createRoadAsphaltTexture(maxAnisotropy: number): THREE.CanvasTex
   ctx.fillRect(0, 0, 512, 512);
 
   // Subtle asphalt aggregate grain
-  for (let i = 0; i < 4500; i++) {
+  for (let i = 0; i < 3500; i++) {
     const x = Math.random() * 512;
     const y = Math.random() * 512;
-    const shade = 30 + Math.floor(Math.random() * 24);
+    const shade = 30 + Math.floor(Math.random() * 22);
     ctx.fillStyle = `rgb(${shade},${shade + 2},${shade + 5})`;
     ctx.fillRect(x, y, 2, 2);
   }
 
   // Yellow curb edge lines
   ctx.fillStyle = '#eab308';
-  ctx.fillRect(14, 0, 8, 512);
-  ctx.fillRect(490, 0, 8, 512);
+  ctx.fillRect(16, 0, 8, 512);
+  ctx.fillRect(488, 0, 8, 512);
 
   // Center white dashed lane divider
   ctx.fillStyle = '#f8fafc';
-  for (let y = 24; y < 512; y += 96) {
-    ctx.fillRect(251, y, 10, 52);
+  for (let y = 32; y < 512; y += 128) {
+    ctx.fillRect(251, y, 10, 64);
   }
 
-  return finalizeColorTexture(canvas, maxAnisotropy, 1, 16);
+  return finalizeColorTexture(canvas, maxAnisotropy, 1, repeatLength);
+}
+
+export function createRoadIntersectionTexture(
+  maxAnisotropy: number
+): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 512;
+  const ctx = canvas.getContext('2d')!;
+
+  ctx.fillStyle = '#262930';
+  ctx.fillRect(0, 0, 512, 512);
+
+  // Subtle asphalt grain
+  for (let i = 0; i < 2500; i++) {
+    const x = Math.random() * 512;
+    const y = Math.random() * 512;
+    const shade = 30 + Math.floor(Math.random() * 20);
+    ctx.fillStyle = `rgb(${shade},${shade + 2},${shade + 5})`;
+    ctx.fillRect(x, y, 2, 2);
+  }
+
+  // Zebra cross stripes on all 4 approaches
+  ctx.fillStyle = '#e2e8f0';
+  for (let s = 64; s <= 424; s += 36) {
+    // Top & Bottom crosswalks
+    ctx.fillRect(s, 18, 20, 54);
+    ctx.fillRect(s, 440, 20, 54);
+    // Left & Right crosswalks
+    ctx.fillRect(18, s, 54, 20);
+    ctx.fillRect(440, s, 54, 20);
+  }
+
+  return finalizeColorTexture(canvas, maxAnisotropy, 1, 1);
 }
 
 export function createPavingTrotoarTexture(maxAnisotropy: number): THREE.CanvasTexture {
@@ -112,21 +149,21 @@ export function createWarungSpandukTexture(
 
   // Header badge
   ctx.fillStyle = borderColor;
-  ctx.fillRect(20, 20, 472, 42);
+  ctx.fillRect(20, 20, 472, 38);
   ctx.fillStyle = '#ffffff';
-  ctx.font = 'bold 24px "Plus Jakarta Sans", sans-serif';
+  ctx.font = 'bold 17px "Plus Jakarta Sans", sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText('KULINER MALAM NUSANTARA ASLI', 256, 49);
+  ctx.fillText('KULINER MALAM NUSANTARA ASLI', 256, 45, 440);
 
-  // Main title
+  // Main title (smaller font + maxWidth 440px so long text never overflows border)
   ctx.fillStyle = '#0f172a';
-  ctx.font = '900 42px "Chakra Petch", sans-serif';
-  ctx.fillText(title, 256, 112);
+  ctx.font = '900 28px "Chakra Petch", sans-serif';
+  ctx.fillText(title, 256, 106, 440);
 
   // Subtitle
   ctx.fillStyle = '#b91c1c';
-  ctx.font = 'bold 24px "Plus Jakarta Sans", sans-serif';
-  ctx.fillText(subtitle, 256, 154);
+  ctx.font = 'bold 18px "Plus Jakarta Sans", sans-serif';
+  ctx.fillText(subtitle, 256, 150, 440);
 
   return finalizeColorTexture(canvas, maxAnisotropy);
 }

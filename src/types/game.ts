@@ -1,4 +1,5 @@
 export type TimeOfDay = 'siang' | 'senja' | 'malam';
+export type WeatherType = 'cerah' | 'hujan';
 export type CameraMode = 'chase' | 'far' | 'top';
 export type OutfitStyle = 'ojol' | 'batik' | 'jaket_kulit';
 export type VehicleType = 'bajaj' | 'angkot' | 'ojol_motor' | 'polisi' | 'bus_telolet';
@@ -37,6 +38,13 @@ export interface InteractableSpot {
   description: string;
 }
 
+export type PedestrianArchetype =
+  | 'warga'
+  | 'pelajar_sma'
+  | 'ojol'
+  | 'pekerja_batik'
+  | 'santri';
+
 export interface HudState {
   money: number;
   health: number;
@@ -55,5 +63,7 @@ export interface HudState {
   notification: { title: string; subtitle: string; tone: 'info' | 'success' | 'warning' } | null;
   playerCoords: { x: number; z: number; heading: number };
   targetCoords: { x: number; z: number; label: string } | null;
+  trafficCoords: { x: number; z: number; type: VehicleType }[];
   completedMissionIds: string[];
 }
+

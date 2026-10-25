@@ -12,6 +12,7 @@ import {
   OutfitStyle,
   TimeOfDay,
   VehicleType,
+  WeatherType,
 } from './types/game';
 import { soundFX } from './utils/sound';
 
@@ -37,6 +38,7 @@ const INITIAL_HUD: HudState = {
   },
   playerCoords: { x: 0, z: 26, heading: Math.PI },
   targetCoords: null,
+  trafficCoords: [],
   completedMissionIds: [],
 };
 
@@ -46,6 +48,7 @@ export default function App() {
 
   const [hud, setHud] = useState<HudState>(INITIAL_HUD);
   const [timeOfDay, setTimeOfDay] = useState<TimeOfDay>('siang');
+  const [weather, setWeather] = useState<WeatherType>('cerah');
   const [cameraMode, setCameraMode] = useState<CameraMode>('chase');
   const [outfit, setOutfit] = useState<OutfitStyle>('ojol');
   const [isMuted, setIsMuted] = useState<boolean>(false);
@@ -94,6 +97,11 @@ export default function App() {
     engineRef.current?.setTimeOfDay(nextTime);
   };
 
+  const handleChangeWeather = (nextWeather: WeatherType) => {
+    setWeather(nextWeather);
+    engineRef.current?.setWeather(nextWeather);
+  };
+
   const handleChangeOutfit = (nextOutfit: OutfitStyle) => {
     setOutfit(nextOutfit);
     engineRef.current?.setOutfit(nextOutfit);
@@ -134,6 +142,7 @@ export default function App() {
       <ControlOverlay
         hud={hud}
         timeOfDay={timeOfDay}
+        weather={weather}
         cameraMode={cameraMode}
         outfit={outfit}
         isMuted={isMuted}
@@ -144,6 +153,7 @@ export default function App() {
         onStartMission={handleStartMission}
         onCancelMission={handleCancelMission}
         onChangeTimeOfDay={handleChangeTimeOfDay}
+        onChangeWeather={handleChangeWeather}
         onChangeOutfit={handleChangeOutfit}
         onChangeCamera={handleChangeCamera}
         onClearWanted={handleClearWanted}

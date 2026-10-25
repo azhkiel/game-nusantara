@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { OutfitStyle, VehicleType } from '../types/game';
+import { OutfitStyle, PedestrianArchetype, VehicleType } from '../types/game';
 import {
   createBatikFabricTexture,
   createLicensePlateTexture,
@@ -231,14 +231,32 @@ export function createPlayerCharacter(
 
 export function createNPCPedestrian(
   shirtColor: number,
-  pantsColor: number
+  pantsColor: number,
+  archetype: PedestrianArchetype = 'warga'
 ): THREE.Group {
   const group = new THREE.Group();
   group.add(createContactShadow(1.1, 1.1));
 
+  // Resolve authentic Indonesian outfit colors per archetype
+  let finalShirt = shirtColor;
+  let finalPants = pantsColor;
+  if (archetype === 'pelajar_sma') {
+    finalShirt = 0xf8fafc; // Putih seragam SMA
+    finalPants = 0x64748b; // Abu-abu SMA
+  } else if (archetype === 'ojol') {
+    finalShirt = 0x16a34a; // Jaket Ojol Hijau
+    finalPants = 0x0f172a;
+  } else if (archetype === 'pekerja_batik') {
+    finalShirt = 0x92400e; // Batik Sogan Cokelat Emas
+    finalPants = 0x1e293b;
+  } else if (archetype === 'santri') {
+    finalShirt = 0xf8fafc; // Baju Koko Putih
+    finalPants = 0x14532d; // Sarung / Celana Hijau Tua
+  }
+
   const skinMat = new THREE.MeshStandardMaterial({ color: 0xd49464, roughness: 0.7 });
-  const shirtMat = new THREE.MeshStandardMaterial({ color: shirtColor, roughness: 0.75 });
-  const pantsMat = new THREE.MeshStandardMaterial({ color: pantsColor, roughness: 0.85 });
+  const shirtMat = new THREE.MeshStandardMaterial({ color: finalShirt, roughness: 0.72 });
+  const pantsMat = new THREE.MeshStandardMaterial({ color: finalPants, roughness: 0.85 });
 
   const legGeo = new THREE.CapsuleGeometry(0.1, 0.45, 4, 8);
   legGeo.translate(0, -0.25, 0);
@@ -256,6 +274,31 @@ export function createNPCPedestrian(
   torso.castShadow = true;
   group.add(torso);
 
+  // Archetype-specific details (SMA tie + backpack, Ojol stripe + helmet, Santri peci)
+  if (archetype === 'pelajar_sma') {
+    const tie = new THREE.Mesh(
+      new THREE.BoxGeometry(0.08, 0.32, 0.04),
+      new THREE.MeshStandardMaterial({ color: 0x475569, roughness: 0.6 })
+    );
+    tie.position.set(0, 1.18, 0.14);
+    group.add(tie);
+
+    const backpack = new THREE.Mesh(
+      new THREE.BoxGeometry(0.36, 0.44, 0.18),
+      new THREE.MeshStandardMaterial({ color: 0x1e3a8a, roughness: 0.75 })
+    );
+    backpack.position.set(0, 1.12, -0.2);
+    backpack.castShadow = true;
+    group.add(backpack);
+  } else if (archetype === 'ojol') {
+    const chestStripe = new THREE.Mesh(
+      new THREE.BoxGeometry(0.5, 0.12, 0.28),
+      new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.5 })
+    );
+    chestStripe.position.set(0, 1.18, 0);
+    group.add(chestStripe);
+  }
+
   const leftArm = new THREE.Mesh(legGeo, shirtMat);
   leftArm.scale.set(0.8, 0.85, 0.8);
   leftArm.position.set(-0.32, 1.35, 0);
@@ -270,13 +313,31 @@ export function createNPCPedestrian(
   head.position.set(0, 1.62, 0);
   group.add(head);
 
-  // Cap / hat accent
-  const cap = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.2, 0.2, 0.1, 12),
-    new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.5 })
-  );
-  cap.position.set(0, 1.76, 0);
-  group.add(cap);
+  // Headgear per archetype
+  if (archetype === 'ojol') {
+    const helmet = new THREE.Mesh(
+      new THREE.SphereGeometry(0.22, 12, 12, 0, Math.PI * 2, 0, Math.PI * 0.68),
+      new THREE.MeshStandardMaterial({ color: 0x16a34a, roughness: 0.3, metalness: 0.2 })
+    );
+    helmet.position.set(0, 1.64, 0);
+    group.add(helmet);
+  } else if (archetype === 'santri') {
+    // Black Indonesian Peci / Songkok
+    const peci = new THREE.Mesh(
+      new THREE.BoxGeometry(0.3, 0.13, 0.34),
+      new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.9 })
+    );
+    peci.position.set(0, 1.78, 0);
+    group.add(peci);
+  } else {
+    const capColor = archetype === 'pelajar_sma' ? 0x1e3a8a : 0x1e293b;
+    const cap = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.2, 0.2, 0.1, 12),
+      new THREE.MeshStandardMaterial({ color: capColor, roughness: 0.5 })
+    );
+    cap.position.set(0, 1.76, 0);
+    group.add(cap);
+  }
 
   group.userData.limbs = { leftLeg, rightLeg, leftArm, rightArm };
   return group;
@@ -1454,4 +1515,475 @@ export function createTuguSurabayaLandmark(maxAnisotropy: number): THREE.Group {
 
   return group;
 }
+
+export function createTamanKota(maxAnisotropy: number): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'TamanKotaNusantara';
+
+  const lawnMat = new THREE.MeshStandardMaterial({
+    color: 0x166534,
+    roughness: 0.85,
+    metalness: 0.02,
+  });
+  const stoneMat = new THREE.MeshStandardMaterial({
+    color: 0xe2e8f0,
+    roughness: 0.65,
+    metalness: 0.05,
+  });
+  const woodMat = new THREE.MeshStandardMaterial({
+    color: 0x78350f,
+    roughness: 0.72,
+    metalness: 0.08,
+  });
+  const roofMat = new THREE.MeshStandardMaterial({
+    color: 0x9a3412,
+    roughness: 0.68,
+    metalness: 0.08,
+  });
+
+  // 1. Full 41.6m x 41.6m Green Park Lawn Base
+  const lawn = new THREE.Mesh(new THREE.BoxGeometry(41.6, 0.08, 41.6), lawnMat);
+  lawn.position.y = 0.04;
+  lawn.receiveShadow = true;
+  group.add(lawn);
+
+  // 2. Cross Promenade Paths & Central Circular Plaza
+  const pathNS = new THREE.Mesh(new THREE.BoxGeometry(4.4, 0.12, 41.6), stoneMat);
+  pathNS.position.y = 0.06;
+  pathNS.receiveShadow = true;
+  group.add(pathNS);
+
+  const pathEW = new THREE.Mesh(new THREE.BoxGeometry(41.6, 0.12, 4.4), stoneMat);
+  pathEW.position.y = 0.06;
+  pathEW.receiveShadow = true;
+  group.add(pathEW);
+
+  const centerCircle = new THREE.Mesh(
+    new THREE.CylinderGeometry(8.5, 8.8, 0.16, 32),
+    stoneMat
+  );
+  centerCircle.position.y = 0.08;
+  centerCircle.receiveShadow = true;
+  group.add(centerCircle);
+
+  // Outer Circular Jogging Track Ring
+  const joggingRing = new THREE.Mesh(
+    new THREE.RingGeometry(13.5, 16.2, 40),
+    new THREE.MeshStandardMaterial({
+      color: 0xb91c1c,
+      roughness: 0.78,
+      side: THREE.DoubleSide,
+    })
+  );
+  joggingRing.rotation.x = -Math.PI / 2;
+  joggingRing.position.y = 0.095;
+  joggingRing.receiveShadow = true;
+  group.add(joggingRing);
+
+  // 3. Central Gazebo Kayu Jati (Pendopo Joglo Taman)
+  const gazeboGroup = new THREE.Group();
+  const gazeboDeck = new THREE.Mesh(
+    new THREE.CylinderGeometry(4.6, 4.9, 0.45, 8),
+    woodMat
+  );
+  gazeboDeck.position.y = 0.32;
+  gazeboDeck.castShadow = true;
+  gazeboDeck.receiveShadow = true;
+  gazeboGroup.add(gazeboDeck);
+
+  for (let i = 0; i < 8; i++) {
+    const angle = (i / 8) * Math.PI * 2 + Math.PI / 8;
+    const px = Math.cos(angle) * 3.8;
+    const pz = Math.sin(angle) * 3.8;
+    const pillar = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.16, 0.18, 3.2, 8),
+      woodMat
+    );
+    pillar.position.set(px, 2.0, pz);
+    pillar.castShadow = true;
+    gazeboGroup.add(pillar);
+  }
+
+  // Two-Tier Joglo Terracotta Roof
+  const lowerRoof = new THREE.Mesh(
+    new THREE.ConeGeometry(5.6, 1.5, 8),
+    roofMat
+  );
+  lowerRoof.position.y = 4.1;
+  lowerRoof.castShadow = true;
+  gazeboGroup.add(lowerRoof);
+
+  const upperRoof = new THREE.Mesh(
+    new THREE.ConeGeometry(3.1, 1.6, 8),
+    roofMat
+  );
+  upperRoof.position.y = 5.1;
+  upperRoof.castShadow = true;
+  gazeboGroup.add(upperRoof);
+
+  const lantern = new THREE.Mesh(
+    new THREE.SphereGeometry(0.35, 12, 12),
+    new THREE.MeshStandardMaterial({
+      color: 0xfef08a,
+      emissive: 0xfacc15,
+      emissiveIntensity: 1.5,
+    })
+  );
+  lantern.position.y = 3.3;
+  gazeboGroup.add(lantern);
+  group.add(gazeboGroup);
+
+  // 4. West Side: Kolam Air Mancur & Ikan Koi (-10.5, 0, -9.5)
+  const pondGroup = new THREE.Group();
+  pondGroup.position.set(-10.5, 0, -9.5);
+  const pondRim = new THREE.Mesh(
+    new THREE.CylinderGeometry(4.5, 4.8, 0.48, 24),
+    stoneMat
+  );
+  pondRim.position.y = 0.24;
+  pondGroup.add(pondRim);
+
+  const pondWater = new THREE.Mesh(
+    new THREE.CylinderGeometry(4.1, 4.1, 0.5, 24),
+    new THREE.MeshPhysicalMaterial({
+      color: 0x06b6d4,
+      roughness: 0.1,
+      metalness: 0.15,
+      clearcoat: 1.0,
+    })
+  );
+  pondWater.position.y = 0.26;
+  pondGroup.add(pondWater);
+
+  const fountainSpout = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.45, 0.8, 1.8, 12),
+    stoneMat
+  );
+  fountainSpout.position.y = 0.9;
+  pondGroup.add(fountainSpout);
+
+  const fountainTop = new THREE.Mesh(
+    new THREE.SphereGeometry(0.65, 12, 12),
+    new THREE.MeshBasicMaterial({ color: 0xe0f2fe })
+  );
+  fountainTop.position.y = 1.95;
+  pondGroup.add(fountainTop);
+  group.add(pondGroup);
+
+  // 5. East Side: Playground Anak (Ayunan & Perosotan Warna-Warni) at (10.5, 0, -9.5)
+  const playGroup = new THREE.Group();
+  playGroup.position.set(10.5, 0, -9.5);
+  const sandPit = new THREE.Mesh(
+    new THREE.BoxGeometry(8.2, 0.12, 7.2),
+    new THREE.MeshStandardMaterial({ color: 0xfde68a, roughness: 0.9 })
+  );
+  sandPit.position.y = 0.08;
+  playGroup.add(sandPit);
+
+  // Swing Set Frame (Ayunan)
+  const metalBlue = new THREE.MeshStandardMaterial({
+    color: 0x0284c7,
+    metalness: 0.5,
+    roughness: 0.35,
+  });
+  const topBar = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.08, 0.08, 4.2, 8),
+    metalBlue
+  );
+  topBar.rotation.z = Math.PI / 2;
+  topBar.position.set(-1.5, 2.5, 0);
+  playGroup.add(topBar);
+
+  for (const sx of [-3.4, 0.4]) {
+    const leg = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.08, 0.08, 2.6, 8),
+      metalBlue
+    );
+    leg.position.set(sx, 1.3, 0);
+    playGroup.add(leg);
+  }
+
+  // Slide (Perosotan Merah-Kuning)
+  const slidePlatform = new THREE.Mesh(
+    new THREE.BoxGeometry(1.4, 1.8, 1.4),
+    new THREE.MeshStandardMaterial({ color: 0xfacc15, roughness: 0.4 })
+  );
+  slidePlatform.position.set(2.2, 0.95, -1.0);
+  playGroup.add(slidePlatform);
+
+  const slideRamp = new THREE.Mesh(
+    new THREE.BoxGeometry(1.1, 0.16, 3.2),
+    new THREE.MeshStandardMaterial({ color: 0xef4444, roughness: 0.25 })
+  );
+  slideRamp.position.set(2.2, 0.95, 0.9);
+  slideRamp.rotation.x = 0.52;
+  playGroup.add(slideRamp);
+  group.add(playGroup);
+
+  // 6. Four Tropical Flowerbed Planters & Park Benches
+  const flowerColors = [0xec4899, 0xfacc15, 0xa855f7, 0xf97316];
+  const quadrantCoords: [number, number][] = [
+    [-9.5, 9.5],
+    [9.5, 9.5],
+    [-9.5, -1.5],
+    [9.5, -1.5],
+  ];
+  quadrantCoords.forEach(([qx, qz], idx) => {
+    const planter = new THREE.Mesh(
+      new THREE.BoxGeometry(4.4, 0.38, 2.0),
+      stoneMat
+    );
+    planter.position.set(qx, 0.22, qz);
+    group.add(planter);
+
+    for (let f = -1.4; f <= 1.4; f += 0.7) {
+      const bush = new THREE.Mesh(
+        new THREE.DodecahedronGeometry(0.52, 1),
+        new THREE.MeshStandardMaterial({
+          color: flowerColors[(idx + Math.round(f + 2)) % flowerColors.length],
+          roughness: 0.65,
+        })
+      );
+      bush.position.set(qx + f, 0.62, qz);
+      group.add(bush);
+    }
+  });
+
+  // Park Benches along Central Plaza
+  for (const [bx, bz, rotY] of [
+    [-6.2, 0, Math.PI / 2],
+    [6.2, 0, -Math.PI / 2],
+    [0, -6.2, 0],
+    [0, 6.2, Math.PI],
+  ]) {
+    const bench = new THREE.Mesh(
+      new THREE.BoxGeometry(2.2, 0.45, 0.65),
+      woodMat
+    );
+    bench.position.set(bx, 0.32, bz);
+    bench.rotation.y = rotY;
+    bench.castShadow = true;
+    group.add(bench);
+  }
+
+  // 7. Welcome Arch & Signage at North Entrance (facing -Z toward z=60 Avenue)
+  const archTex = createWarungSpandukTexture(
+    'TAMAN KOTA NUSANTARA',
+    'RUANG TERBUKA HIJAU · REKREASI WARGA',
+    '#dcfce7',
+    '#15803d',
+    maxAnisotropy
+  );
+  const archSign = new THREE.Mesh(
+    new THREE.BoxGeometry(6.8, 1.35, 0.28),
+    new THREE.MeshStandardMaterial({ map: archTex, roughness: 0.35 })
+  );
+  archSign.position.set(0, 3.6, -18.8);
+  group.add(archSign);
+
+  for (const px of [-3.1, 3.1]) {
+    const archPole = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.18, 0.22, 3.8, 8),
+      woodMat
+    );
+    archPole.position.set(px, 1.9, -18.8);
+    archPole.castShadow = true;
+    group.add(archPole);
+  }
+
+  return group;
+}
+
+export function createSekolahNusantara(maxAnisotropy: number): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'SekolahSMAN1Nusantara';
+
+  const wallMat = new THREE.MeshStandardMaterial({
+    color: 0xfef3c7,
+    roughness: 0.65,
+    metalness: 0.05,
+  });
+  const whiteTrimMat = new THREE.MeshStandardMaterial({
+    color: 0xf8fafc,
+    roughness: 0.5,
+  });
+  const gentengRoofMat = new THREE.MeshStandardMaterial({
+    color: 0x991b1b,
+    roughness: 0.68,
+    metalness: 0.08,
+  });
+  const glassMat = new THREE.MeshPhysicalMaterial({
+    color: 0x38bdf8,
+    roughness: 0.15,
+    metalness: 0.2,
+    clearcoat: 0.9,
+  });
+
+  // 1. School Campus Courtyard Paving & Lawn Base (41.6m x 41.6m)
+  const campusBase = new THREE.Mesh(
+    new THREE.BoxGeometry(41.6, 0.08, 41.6),
+    new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.82 })
+  );
+  campusBase.position.y = 0.04;
+  campusBase.receiveShadow = true;
+  group.add(campusBase);
+
+  // 2. Lapangan Upacara & Lapangan Basket in Front Courtyard (z = -6.5)
+  const courtMesh = new THREE.Mesh(
+    new THREE.BoxGeometry(22, 0.08, 13.5),
+    new THREE.MeshStandardMaterial({ color: 0x0f766e, roughness: 0.72 })
+  );
+  courtMesh.position.set(0, 0.09, -6.5);
+  courtMesh.receiveShadow = true;
+  group.add(courtMesh);
+
+  const courtBorder = new THREE.Mesh(
+    new THREE.RingGeometry(2.2, 2.45, 24),
+    new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide })
+  );
+  courtBorder.rotation.x = -Math.PI / 2;
+  courtBorder.position.set(0, 0.14, -6.5);
+  group.add(courtBorder);
+
+  // Tiang Bendera Merah Putih (School Ceremony Flagpole at z = -1.2)
+  const flagPedestal = new THREE.Mesh(
+    new THREE.BoxGeometry(2.4, 0.45, 2.4),
+    whiteTrimMat
+  );
+  flagPedestal.position.set(0, 0.28, -1.2);
+  group.add(flagPedestal);
+
+  const flagPole = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.09, 0.13, 11.5, 10),
+    whiteTrimMat
+  );
+  flagPole.position.set(0, 5.8, -1.2);
+  flagPole.castShadow = true;
+  group.add(flagPole);
+
+  const flagRed = new THREE.Mesh(
+    new THREE.BoxGeometry(2.2, 0.65, 0.06),
+    new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.5 })
+  );
+  flagRed.position.set(1.1, 10.9, -1.2);
+  group.add(flagRed);
+
+  const flagWhite = new THREE.Mesh(
+    new THREE.BoxGeometry(2.2, 0.65, 0.06),
+    new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5 })
+  );
+  flagWhite.position.set(1.1, 10.25, -1.2);
+  group.add(flagWhite);
+
+  // 3. Main 2-Story School Building (Gedung Utama di Selatan z = +10.5)
+  const mainHall = new THREE.Mesh(
+    new THREE.BoxGeometry(32, 8.6, 8.8),
+    wallMat
+  );
+  mainHall.position.set(0, 4.35, 10.5);
+  mainHall.castShadow = true;
+  mainHall.receiveShadow = true;
+  group.add(mainHall);
+
+  // Pitched Terracotta Roof (Atap Genteng Merah Khas Sekolah Indonesia)
+  const mainRoof = new THREE.Mesh(
+    new THREE.ConeGeometry(24, 3.8, 4),
+    gentengRoofMat
+  );
+  mainRoof.rotation.y = Math.PI / 4;
+  mainRoof.scale.set(1.02, 1, 0.36);
+  mainRoof.position.set(0, 10.5, 10.5);
+  mainRoof.castShadow = true;
+  group.add(mainRoof);
+
+  // Classroom Windows along Floor 1 & Floor 2 of Main Hall
+  for (let wx = -12; wx <= 12; wx += 4) {
+    for (const wy of [2.6, 6.4]) {
+      const win = new THREE.Mesh(
+        new THREE.BoxGeometry(2.4, 1.5, 0.16),
+        glassMat
+      );
+      win.position.set(wx, wy, 6.05);
+      group.add(win);
+    }
+  }
+
+  // Second-Floor Balcony Corridor & White Pillars
+  const balconySlab = new THREE.Mesh(
+    new THREE.BoxGeometry(32.4, 0.4, 2.2),
+    whiteTrimMat
+  );
+  balconySlab.position.set(0, 4.5, 5.2);
+  group.add(balconySlab);
+
+  for (let px = -14; px <= 14; px += 4) {
+    const col = new THREE.Mesh(
+      new THREE.BoxGeometry(0.42, 8.4, 0.42),
+      whiteTrimMat
+    );
+    col.position.set(px, 4.25, 4.4);
+    col.castShadow = true;
+    group.add(col);
+  }
+
+  // 4. Left & Right Classroom Wings (Leter-U Campus Layout)
+  for (const sx of [-14.2, 14.2]) {
+    const wing = new THREE.Mesh(
+      new THREE.BoxGeometry(6.8, 7.2, 16.5),
+      wallMat
+    );
+    wing.position.set(sx, 3.65, -1.5);
+    wing.castShadow = true;
+    wing.receiveShadow = true;
+    group.add(wing);
+
+    const wingRoof = new THREE.Mesh(
+      new THREE.ConeGeometry(13.2, 3.0, 4),
+      gentengRoofMat
+    );
+    wingRoof.rotation.y = Math.PI / 4;
+    wingRoof.scale.set(0.45, 1, 0.95);
+    wingRoof.position.set(sx, 8.7, -1.5);
+    wingRoof.castShadow = true;
+    group.add(wingRoof);
+  }
+
+  // 5. Front School Perimeter Fence & Main Gate with Banner (at North edge z = -19.2)
+  for (const fx of [-12.5, 12.5]) {
+    const fenceWall = new THREE.Mesh(
+      new THREE.BoxGeometry(13.5, 1.7, 0.45),
+      whiteTrimMat
+    );
+    fenceWall.position.set(fx, 0.9, -19.2);
+    fenceWall.castShadow = true;
+    group.add(fenceWall);
+  }
+
+  for (const gx of [-4.6, 4.6]) {
+    const gatePillar = new THREE.Mesh(
+      new THREE.BoxGeometry(0.85, 4.4, 0.85),
+      gentengRoofMat
+    );
+    gatePillar.position.set(gx, 2.25, -19.2);
+    gatePillar.castShadow = true;
+    group.add(gatePillar);
+  }
+
+  const schoolBannerTex = createWarungSpandukTexture(
+    'SMA NEGERI 1 NUSANTARA',
+    'GENERASI CERDAS · BERPRESTASI & BERBUDAYA',
+    '#fef08a',
+    '#1e3a8a',
+    maxAnisotropy
+  );
+  const schoolSign = new THREE.Mesh(
+    new THREE.BoxGeometry(9.8, 1.55, 0.35),
+    new THREE.MeshStandardMaterial({ map: schoolBannerTex, roughness: 0.35 })
+  );
+  schoolSign.position.set(0, 4.35, -19.2);
+  group.add(schoolSign);
+
+  return group;
+}
+
 

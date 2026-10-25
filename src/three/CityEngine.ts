@@ -6,8 +6,10 @@ import {
   InteractableSpot,
   Mission,
   OutfitStyle,
+  PedestrianArchetype,
   TimeOfDay,
   VehicleType,
+  WeatherType,
 } from '../types/game';
 import { soundFX } from '../utils/sound';
 import {
@@ -18,6 +20,8 @@ import {
   createMonasLandmark,
   createNPCPedestrian,
   createPlayerCharacter,
+  createSekolahNusantara,
+  createTamanKota,
   createTuguSurabayaLandmark,
   createVehicleMesh,
   createWarungTenda,
@@ -25,18 +29,19 @@ import {
 import {
   createPavingTrotoarTexture,
   createRoadAsphaltTexture,
+  createRoadIntersectionTexture,
   createRukoFacadeTexture,
 } from './textures';
 import {
   getDistrictName,
   INTERACTABLE_SPOTS,
   MISSIONS,
+  ROAD_GRID_LINES,
+  ROAD_WIDTH,
   VEHICLE_SPECS,
 } from './worldData';
 
 // Pre-allocated math helpers at module scope (Zero GC in render loop)
-const _vec3A = new THREE.Vector3();
-const _vec3B = new THREE.Vector3();
 const _vec3CamTarget = new THREE.Vector3();
 const _vec3CamDesired = new THREE.Vector3();
 const _dummyObj = new THREE.Object3D();
@@ -51,8 +56,8 @@ export interface ActiveVehicleInstance {
   heading: number;
   steerAngle: number;
   isAI: boolean;
-  aiRouteAxis: 'x' | 'z' | 'loop';
-  aiDirection: number;
+  waypoints: { x: number; z: number }[];
+  waypointIdx: number;
   maxSpeed: number;
   acceleration: number;
   turnSpeed: number;
@@ -63,10 +68,8 @@ export interface ActivePedestrian {
   heading: number;
   speed: number;
   walkCycle: number;
-  boundsMinX: number;
-  boundsMaxX: number;
-  boundsMinZ: number;
-  boundsMaxZ: number;
+  waypoints: { x: number; z: number }[];
+  waypointIdx: number;
 }
 
 export interface BuildingCollider {
@@ -88,16 +91,28 @@ export class CityEngine {
   private clock: THREE.Clock = new THREE.Clock();
   private isDisposed: boolean = false;
 
-  // Lighting references for Time of Day transitions
+  // Lighting & Sky/Weather references
   private keyLight!: THREE.DirectionalLight;
   private hemiLight!: THREE.HemisphereLight;
   private rimLight!: THREE.DirectionalLight;
   private streetLampBulbs: THREE.MeshStandardMaterial[] = [];
+  private roadMaterials: THREE.MeshStandardMaterial[] = [];
+
+  private sunGroup!: THREE.Group;
+  private sunCoreMat!: THREE.MeshBasicMaterial;
+  private sunHaloMat!: THREE.MeshBasicMaterial;
+  private moonGroup!: THREE.Group;
+  private starsPoints!: THREE.Points;
+  private cloudMat!: THREE.MeshStandardMaterial;
+  private cloudGroups: { group: THREE.Group; speed: number }[] = [];
+  private rainGroup!: THREE.Group;
+  private rainLines!: THREE.LineSegments;
+  private rainDropsCount = 850;
 
   // Actors & World state
   private playerMesh!: THREE.Group;
   private playerOutfit: OutfitStyle = 'ojol';
-  private playerPos = new THREE.Vector3(0, 0, 26);
+  private playerPos = new THREE.Vector3(-8.5, 0, 28);
   private playerHeading = Math.PI; // facing North toward Monas
   private playerVelocityY = 0;
   private playerWalkCycle = 0;
@@ -121,6 +136,7 @@ export class CityEngine {
   private wantedDecayTimer = 0;
   private cameraMode: CameraMode = 'chase';
   private timeOfDay: TimeOfDay = 'siang';
+  private weather: WeatherType = 'cerah';
 
   private activeMission: Mission | null = null;
   private missionStage: 'idle' | 'to_pickup' | 'to_dropoff' = 'idle';
@@ -128,7 +144,7 @@ export class CityEngine {
   private completedMissionIds: string[] = [];
   private notification: HudState['notification'] = {
     title: 'Selamat Datang di Kota Raya Nusantara!',
-    subtitle: 'Gunakan WASD untuk jalan, tekan F untuk naik Bajaj/Motor Ojol di dekatmu.',
+    subtitle: 'Tugu Monas (Barat) & Tugu Surabaya (Timur) kini berdiri di lahan taman sendiri!',
     tone: 'info',
   };
   private notificationTimer = 7.0;
@@ -172,7 +188,10 @@ export class CityEngine {
     );
     this.renderer.shadowMap.enabled = !this.isSoftwareGl;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    this.renderer.setSize(container.clientWidth || window.innerWidth, container.clientHeight || window.innerHeight);
+    this.renderer.setSize(
+      container.clientWidth || window.innerWidth,
+      container.clientHeight || window.innerHeight
+    );
 
     this.maxAnisotropy = this.renderer.capabilities.getMaxAnisotropy();
     container.appendChild(this.renderer.domElement);
@@ -180,16 +199,16 @@ export class CityEngine {
     // 3. Scene & Camera Setup
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x7dd3fc);
-    this.scene.fog = new THREE.FogExp2(0x7dd3fc, 0.0042);
+    this.scene.fog = new THREE.FogExp2(0x7dd3fc, 0.0028);
 
     this.camera = new THREE.PerspectiveCamera(
       60,
       (container.clientWidth || window.innerWidth) /
         (container.clientHeight || window.innerHeight),
       0.2,
-      360
+      520
     );
-    this.camera.position.set(0, 8, 36);
+    this.camera.position.set(-8.5, 8, 38);
 
     // 4. Mandatory Studio Environment Reflection (RoomEnvironment)
     const pmremGenerator = new THREE.PMREMGenerator(this.renderer);
@@ -199,9 +218,10 @@ export class CityEngine {
     ).texture;
     pmremGenerator.dispose();
 
-    // 5. Build Lighting, Indonesian City World, Vehicles, Pedestrians, and Player
+    // 5. Build Lighting, Expanded Indonesian City Grid, Sky/Weather, Vehicles, Pedestrians, and Player
     this.setupLighting();
     this.buildIndonesianCity();
+    this.setupSkyAndWeather();
     this.spawnPlayer();
     this.spawnVehicles();
     this.spawnPedestrians();
@@ -218,37 +238,224 @@ export class CityEngine {
   }
 
   private setupLighting() {
-    // Warm Directional Key Light (Sun)
     this.keyLight = new THREE.DirectionalLight(0xfffbeb, 2.2);
-    this.keyLight.position.set(65, 95, 55);
+    this.keyLight.position.set(85, 125, 75);
     this.keyLight.castShadow = !this.isSoftwareGl;
     this.keyLight.shadow.mapSize.width = 2048;
     this.keyLight.shadow.mapSize.height = 2048;
-    const d = 95;
+    const d = 145;
     this.keyLight.shadow.camera.left = -d;
     this.keyLight.shadow.camera.right = d;
     this.keyLight.shadow.camera.top = d;
     this.keyLight.shadow.camera.bottom = -d;
     this.keyLight.shadow.camera.near = 10;
-    this.keyLight.shadow.camera.far = 240;
+    this.keyLight.shadow.camera.far = 320;
     this.keyLight.shadow.bias = -0.0005;
     this.keyLight.shadow.normalBias = 0.02;
     this.scene.add(this.keyLight);
 
-    // Cool Sky / Warm Ground Hemisphere Fill Light
     this.hemiLight = new THREE.HemisphereLight(0xbae6fd, 0x3f6212, 0.85);
-    this.hemiLight.position.set(0, 60, 0);
+    this.hemiLight.position.set(0, 80, 0);
     this.scene.add(this.hemiLight);
 
-    // Rim / Backlight
     this.rimLight = new THREE.DirectionalLight(0x93c5fd, 0.55);
-    this.rimLight.position.set(-60, 45, -60);
+    this.rimLight.position.set(-80, 55, -80);
     this.scene.add(this.rimLight);
   }
 
+  private buildExpandedRoadGrid(trotoarMat: THREE.MeshStandardMaterial) {
+    const roadSegTex = createRoadAsphaltTexture(this.maxAnisotropy, 3);
+    const roadSegMat = new THREE.MeshStandardMaterial({
+      map: roadSegTex,
+      roughness: 0.82,
+      metalness: 0.08,
+    });
+
+    const intersectionTex = createRoadIntersectionTexture(this.maxAnisotropy);
+    const intersectionMat = new THREE.MeshStandardMaterial({
+      map: intersectionTex,
+      roughness: 0.82,
+      metalness: 0.08,
+    });
+
+    this.roadMaterials.push(roadSegMat, intersectionMat);
+
+    // 1. Place Clean 4-Way Zebra Cross Intersections at ALL 25 Nodes in the 5x5 Road Grid
+    for (const gx of ROAD_GRID_LINES) {
+      for (const gz of ROAD_GRID_LINES) {
+        const interMesh = new THREE.Mesh(
+          new THREE.PlaneGeometry(ROAD_WIDTH, ROAD_WIDTH),
+          intersectionMat
+        );
+        interMesh.rotation.x = -Math.PI / 2;
+        interMesh.position.set(gx, 0.025, gz);
+        interMesh.receiveShadow = true;
+        this.scene.add(interMesh);
+      }
+    }
+
+    // Helper to add a straight road segment between two coordinates with properly oriented lane markings
+    const addRoadSegment = (
+      axis: 'ns' | 'ew',
+      fixedCoord: number,
+      startC: number,
+      endC: number
+    ) => {
+      const length = Math.abs(endC - startC);
+      if (length <= 1) return;
+      const mid = (startC + endC) / 2;
+      const geo = new THREE.PlaneGeometry(ROAD_WIDTH, length);
+      const mesh = new THREE.Mesh(geo, roadSegMat);
+      mesh.rotation.x = -Math.PI / 2;
+      if (axis === 'ew') {
+        mesh.rotation.z = Math.PI / 2; // Align dashed lane markings East-West
+        mesh.position.set(mid, 0.022, fixedCoord);
+      } else {
+        mesh.position.set(fixedCoord, 0.022, mid);
+      }
+      mesh.receiveShadow = true;
+      this.scene.add(mesh);
+    };
+
+    // 2. Connect all North-South Road Segments along x = -120, -60, 0, 60, 120
+    for (const gx of ROAD_GRID_LINES) {
+      for (let i = 0; i < ROAD_GRID_LINES.length - 1; i++) {
+        const z1 = ROAD_GRID_LINES[i];
+        const z2 = ROAD_GRID_LINES[i + 1];
+        addRoadSegment('ns', gx, z1 + ROAD_WIDTH / 2, z2 - ROAD_WIDTH / 2);
+      }
+    }
+
+    // 3. Connect all East-West Road Segments along z = -120, -60, 0, 60, 120
+    for (const gz of ROAD_GRID_LINES) {
+      for (let i = 0; i < ROAD_GRID_LINES.length - 1; i++) {
+        const x1 = ROAD_GRID_LINES[i];
+        const x2 = ROAD_GRID_LINES[i + 1];
+        addRoadSegment('ew', gz, x1 + ROAD_WIDTH / 2, x2 - ROAD_WIDTH / 2);
+      }
+    }
+
+    // 4. Add 4 Gateway Avenue Spurs extending to ±142m under the Gapura Merah Putih arches
+    addRoadSegment('ns', 0, 127, 142);
+    addRoadSegment('ns', 0, -142, -127);
+    addRoadSegment('ew', 0, 127, 142);
+    addRoadSegment('ew', 0, -142, -127);
+
+    // 5. Neatly Framed City Block Sidewalks (Trotoar) inside every 46m x 46m block
+    for (let xi = 0; xi < ROAD_GRID_LINES.length - 1; xi++) {
+      for (let zi = 0; zi < ROAD_GRID_LINES.length - 1; zi++) {
+        const cx = (ROAD_GRID_LINES[xi] + ROAD_GRID_LINES[xi + 1]) / 2; // -90, -30, 30, 90
+        const cz = (ROAD_GRID_LINES[zi] + ROAD_GRID_LINES[zi + 1]) / 2;
+        const blockSpan = 46; // 60 - 14 = 46m between road edges
+
+        // North & South sidewalk strips of the block
+        for (const sz of [-blockSpan / 2 + 1.1, blockSpan / 2 - 1.1]) {
+          const swH = new THREE.Mesh(
+            new THREE.BoxGeometry(blockSpan, 0.14, 2.2),
+            trotoarMat
+          );
+          swH.position.set(cx, 0.07, cz + sz);
+          swH.receiveShadow = true;
+          this.scene.add(swH);
+        }
+
+        // West & East sidewalk strips of the block
+        for (const sx of [-blockSpan / 2 + 1.1, blockSpan / 2 - 1.1]) {
+          const swV = new THREE.Mesh(
+            new THREE.BoxGeometry(2.2, 0.14, blockSpan - 4.4),
+            trotoarMat
+          );
+          swV.position.set(cx + sx, 0.07, cz);
+          swV.receiveShadow = true;
+          this.scene.add(swV);
+        }
+      }
+    }
+  }
+
+  private buildDedicatedLandmarkPark(
+    cx: number,
+    cz: number,
+    trotoarMat: THREE.MeshStandardMaterial
+  ) {
+    // Dedicated 41.6m x 41.6m manicured green park lawn inside the 46m x 46m city block
+    const parkLawn = new THREE.Mesh(
+      new THREE.BoxGeometry(41.6, 0.08, 41.6),
+      new THREE.MeshStandardMaterial({
+        color: 0x15803d,
+        roughness: 0.85,
+        metalness: 0.02,
+      })
+    );
+    parkLawn.position.set(cx, 0.04, cz);
+    parkLawn.receiveShadow = true;
+    this.scene.add(parkLawn);
+
+    // Central Ceremonial Stone Plaza (27m x 27m)
+    const centerPlaza = new THREE.Mesh(
+      new THREE.BoxGeometry(27, 0.16, 27),
+      trotoarMat
+    );
+    centerPlaza.position.set(cx, 0.08, cz);
+    centerPlaza.receiveShadow = true;
+    this.scene.add(centerPlaza);
+
+    // 4 Wide Promenade Walkways connecting the central plaza to all 4 block sidewalks
+    const walkwayNS = new THREE.Mesh(
+      new THREE.BoxGeometry(6.4, 0.15, 41.6),
+      trotoarMat
+    );
+    walkwayNS.position.set(cx, 0.075, cz);
+    walkwayNS.receiveShadow = true;
+    this.scene.add(walkwayNS);
+
+    const walkwayEW = new THREE.Mesh(
+      new THREE.BoxGeometry(41.6, 0.15, 6.4),
+      trotoarMat
+    );
+    walkwayEW.position.set(cx, 0.075, cz);
+    walkwayEW.receiveShadow = true;
+    this.scene.add(walkwayEW);
+
+    // Ornamental Red-and-Gold Perimeter Park Bollards along the lawn edges
+    const bollardBodyMat = new THREE.MeshStandardMaterial({
+      color: 0x991b1b,
+      roughness: 0.5,
+      metalness: 0.2,
+    });
+    const bollardCapMat = new THREE.MeshStandardMaterial({
+      color: 0xfacc15,
+      roughness: 0.3,
+      metalness: 0.7,
+    });
+    const bollardOffsets = [-17, -11, 11, 17];
+    for (const off of bollardOffsets) {
+      for (const [bx, bz] of [
+        [cx + off, cz - 20.2],
+        [cx + off, cz + 20.2],
+        [cx - 20.2, cz + off],
+        [cx + 20.2, cz + off],
+      ]) {
+        const post = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.18, 0.22, 0.75, 8),
+          bollardBodyMat
+        );
+        post.position.set(bx, 0.42, bz);
+        this.scene.add(post);
+
+        const cap = new THREE.Mesh(
+          new THREE.SphereGeometry(0.22, 8, 8),
+          bollardCapMat
+        );
+        cap.position.set(bx, 0.85, bz);
+        this.scene.add(cap);
+      }
+    }
+  }
+
   private buildIndonesianCity() {
-    // 1. Extended Natural Island Ground & Surrounding Coastal Ocean (Zero indoor walls!)
-    const oceanGeo = new THREE.PlaneGeometry(900, 900);
+    // 1. Expanded Natural Island Ground (Radius 215m) & Coastal Ocean
+    const oceanGeo = new THREE.PlaneGeometry(1400, 1400);
     const oceanMat = new THREE.MeshStandardMaterial({
       color: 0x0369a1,
       roughness: 0.18,
@@ -259,7 +466,7 @@ export class CityEngine {
     ocean.position.y = -0.45;
     this.scene.add(ocean);
 
-    const islandGeo = new THREE.CylinderGeometry(155, 165, 0.9, 48);
+    const islandGeo = new THREE.CylinderGeometry(215, 228, 0.9, 64);
     const grassMat = new THREE.MeshStandardMaterial({
       color: 0x3f6212,
       roughness: 0.88,
@@ -270,14 +477,6 @@ export class CityEngine {
     island.receiveShadow = true;
     this.scene.add(island);
 
-    // 2. Road Network (Offset on Y >= 0.02 to prevent Z-fighting)
-    const roadTex = createRoadAsphaltTexture(this.maxAnisotropy);
-    const roadMat = new THREE.MeshStandardMaterial({
-      map: roadTex,
-      roughness: 0.82,
-      metalness: 0.08,
-    });
-
     const trotoarTex = createPavingTrotoarTexture(this.maxAnisotropy);
     const trotoarMat = new THREE.MeshStandardMaterial({
       map: trotoarTex,
@@ -285,109 +484,30 @@ export class CityEngine {
       metalness: 0.05,
     });
 
-    // North-South & East-West Main Avenues (Jalan Protokol Sudirman - Thamrin)
-    const nsRoad = new THREE.Mesh(new THREE.PlaneGeometry(14, 176), roadMat);
-    nsRoad.rotation.x = -Math.PI / 2;
-    nsRoad.position.y = 0.02;
-    nsRoad.receiveShadow = true;
-    this.scene.add(nsRoad);
+    // 2. Build Expanded & Neatly Aligned 5x5 Boulevard Road Network
+    this.buildExpandedRoadGrid(trotoarMat);
 
-    const ewRoad = new THREE.Mesh(new THREE.PlaneGeometry(176, 14), roadMat);
-    ewRoad.rotation.x = -Math.PI / 2;
-    ewRoad.position.y = 0.025;
-    ewRoad.receiveShadow = true;
-    this.scene.add(ewRoad);
-
-    // Outer Ring Road Loop (at ±48m)
-    for (const offset of [-48, 48]) {
-      const hRoad = new THREE.Mesh(new THREE.PlaneGeometry(110, 12), roadMat);
-      hRoad.rotation.x = -Math.PI / 2;
-      hRoad.position.set(0, 0.022, offset);
-      hRoad.receiveShadow = true;
-      this.scene.add(hRoad);
-
-      const vRoad = new THREE.Mesh(new THREE.PlaneGeometry(12, 110), roadMat);
-      vRoad.rotation.x = -Math.PI / 2;
-      vRoad.position.set(offset, 0.024, 0);
-      vRoad.receiveShadow = true;
-      this.scene.add(vRoad);
-    }
-
-    // Central Alun-Alun Monas Roundabout Plaza
-    const plazaRing = new THREE.Mesh(
-      new THREE.RingGeometry(15, 23, 36),
-      new THREE.MeshStandardMaterial({
-        color: 0x262930,
-        roughness: 0.8,
-        side: THREE.DoubleSide,
-      })
-    );
-    plazaRing.rotation.x = -Math.PI / 2;
-    plazaRing.position.y = 0.03;
-    plazaRing.receiveShadow = true;
-    this.scene.add(plazaRing);
-
-    const monasParkPlaza = new THREE.Mesh(
-      new THREE.CylinderGeometry(15, 15.2, 0.14, 32),
-      trotoarMat
-    );
-    monasParkPlaza.position.y = 0.07;
-    monasParkPlaza.receiveShadow = true;
-    this.scene.add(monasParkPlaza);
-
-    // Sidewalks (Trotoar) along main roads
-    for (const side of [-8.8, 8.8]) {
-      const swNS = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.14, 168), trotoarMat);
-      swNS.position.set(side, 0.07, 0);
-      swNS.receiveShadow = true;
-      this.scene.add(swNS);
-
-      const swEW = new THREE.Mesh(new THREE.BoxGeometry(168, 0.14, 3.2), trotoarMat);
-      swEW.position.set(0, 0.07, side);
-      swEW.receiveShadow = true;
-      this.scene.add(swEW);
-    }
-
-    // 3. Tugu Monas Landmark in Center (0, 0)
+    // 3. Dedicated Park Block for Tugu Monas at West District (-90, -30) — Completely Off the Road!
+    this.buildDedicatedLandmarkPark(-90, -30, trotoarMat);
     const monas = createMonasLandmark();
-    monas.position.set(0, 0.12, 0);
+    monas.position.set(-90, 0.16, -30);
     this.scene.add(monas);
-    this.colliders.push({ minX: -12, maxX: 12, minZ: -12, maxZ: 12 });
+    this.colliders.push({ minX: -102, maxX: -78, minZ: -42, maxZ: -18 });
 
-    // 3b. Bundaran Tugu Surabaya (Patung Sura & Baya + Tugu Pahlawan) at (48, 0)
-    const surabayaRing = new THREE.Mesh(
-      new THREE.RingGeometry(10.5, 16.5, 32),
-      new THREE.MeshStandardMaterial({
-        color: 0x262930,
-        roughness: 0.8,
-        side: THREE.DoubleSide,
-      })
-    );
-    surabayaRing.rotation.x = -Math.PI / 2;
-    surabayaRing.position.set(48, 0.032, 0);
-    surabayaRing.receiveShadow = true;
-    this.scene.add(surabayaRing);
-
-    const surabayaPlaza = new THREE.Mesh(
-      new THREE.CylinderGeometry(10.5, 10.7, 0.14, 32),
-      trotoarMat
-    );
-    surabayaPlaza.position.set(48, 0.07, 0);
-    surabayaPlaza.receiveShadow = true;
-    this.scene.add(surabayaPlaza);
-
+    // 4. Dedicated Park Block for Tugu Surabaya at East District (90, 30) — 190m Far Apart & Off the Road!
+    this.buildDedicatedLandmarkPark(90, 30, trotoarMat);
     const tuguSurabaya = createTuguSurabayaLandmark(this.maxAnisotropy);
-    tuguSurabaya.position.set(48, 0.12, 0);
-    tuguSurabaya.rotation.y = -Math.PI / 2; // Facing West toward Monas & Center Avenue
+    tuguSurabaya.position.set(90, 0.16, 30);
+    tuguSurabaya.rotation.y = Math.PI; // Facing North (-Z) toward the main z = 0 Boulevard entrance at (90, 11)
     this.scene.add(tuguSurabaya);
-    this.colliders.push({ minX: 39.5, maxX: 56.5, minZ: -8.5, maxZ: 8.5 });
+    this.colliders.push({ minX: 80.5, maxX: 99.5, minZ: 20.5, maxZ: 39.5 });
 
-    // 4. Four Gapura Merah Putih Archways on N/S/E/W Avenues
+    // 5. Four Gapura Merah Putih Archways on Outer N/S/E/W Gateways (±132m)
     const gapuraPositions: [number, number, number][] = [
-      [0, 78, 0],
-      [0, -78, 0],
-      [78, 0, Math.PI / 2],
-      [-78, 0, Math.PI / 2],
+      [0, 132, 0],
+      [0, -132, 0],
+      [132, 0, Math.PI / 2],
+      [-132, 0, Math.PI / 2],
     ];
     gapuraPositions.forEach(([gx, gz, rotY]) => {
       const gapura = createGapuraMerahPutih();
@@ -396,8 +516,8 @@ export class CityEngine {
       this.scene.add(gapura);
     });
 
-    // 5. Iconic Interactive Indonesian Locations + Glowing Ground Rings
-    // Warung Pecel Lele Cak Har (-30, 26)
+    // 6. Iconic Interactive Indonesian Locations Neatly Aligned to Sidewalks
+    // Warung Pecel Lele Cak Har (-32, 13.5) facing North toward z = 0 Boulevard
     const warungPecel = createWarungTenda(
       'PECEL LELE & SOTO CAK HAR',
       'SAMBAL KOREK PEDAS · ES TEH JUMBO',
@@ -405,12 +525,12 @@ export class CityEngine {
       '#15803d',
       this.maxAnisotropy
     );
-    warungPecel.position.set(-30, 0, 26);
-    warungPecel.rotation.y = Math.PI / 4;
+    warungPecel.position.set(-32, 0, 13.8);
+    warungPecel.rotation.y = Math.PI;
     this.scene.add(warungPecel);
-    this.colliders.push({ minX: -33.2, maxX: -26.8, minZ: 23.2, maxZ: 28.8 });
+    this.colliders.push({ minX: -35.4, maxX: -28.6, minZ: 11.4, maxZ: 16.2 });
 
-    // Warung Bakso Urat Solo (30, -26)
+    // Warung Bakso Urat Solo (32, -13.8) facing South toward z = 0 Boulevard
     const warungBakso = createWarungTenda(
       'BAKSO URAT GRANAT SOLO',
       'MIE AYAM SPESIAL · ES JERUK MURNI',
@@ -418,45 +538,64 @@ export class CityEngine {
       '#b91c1c',
       this.maxAnisotropy
     );
-    warungBakso.position.set(30, 0, -26);
-    warungBakso.rotation.y = -Math.PI * 0.75;
+    warungBakso.position.set(32, 0, -13.8);
+    warungBakso.rotation.y = 0;
     this.scene.add(warungBakso);
-    this.colliders.push({ minX: 26.8, maxX: 33.2, minZ: -28.8, maxZ: -23.2 });
+    this.colliders.push({ minX: 28.6, maxX: 35.4, minZ: -16.2, maxZ: -11.4 });
 
-    // Minimarket Indoalfa (-32, -30)
+    // Minimarket Indoalfa (-16, -34) facing East toward x = 0 Boulevard
     const indoalfa = createIndoalfaMinimarket(
       'INDOALFA',
       this.maxAnisotropy,
       this.isSoftwareGl
     );
-    indoalfa.position.set(-32, 0, -34);
+    indoalfa.position.set(-16, 0, -34);
+    indoalfa.rotation.y = Math.PI / 2;
     this.scene.add(indoalfa);
-    this.colliders.push({ minX: -38, maxX: -26, minZ: -38.5, maxZ: -29.5 });
+    this.colliders.push({ minX: -20.5, maxX: -11.5, minZ: -39.8, maxZ: -28.2 });
 
-    // Minimarket Alfamaret (-62, 26)
+    // Minimarket Alfamaret (-76, 30) facing East toward x = -60 Avenue
     const alfamaret = createIndoalfaMinimarket(
       'ALFAMARET',
       this.maxAnisotropy,
       this.isSoftwareGl
     );
-    alfamaret.position.set(-62, 0, 26);
+    alfamaret.position.set(-76, 0, 30);
     alfamaret.rotation.y = Math.PI / 2;
     this.scene.add(alfamaret);
-    this.colliders.push({ minX: -66.5, maxX: -57.5, minZ: 20, maxZ: 32 });
+    this.colliders.push({ minX: -80.5, maxX: -71.5, minZ: 24.2, maxZ: 35.8 });
 
-    // Bengkel Cat Kilat & Cuci Steam (34, 32)
+    // Bengkel Cat Kilat & Cuci Steam (16, 36) facing West toward x = 0 Boulevard
     const bengkel = createBengkelCat(this.maxAnisotropy);
-    bengkel.position.set(34, 0, 32);
+    bengkel.position.set(16, 0, 36);
     bengkel.rotation.y = -Math.PI / 2;
     this.scene.add(bengkel);
 
-    // Masjid Agung Nusantara (36, -68)
+    // Masjid Agung Nusantara (32, -78) facing South toward z = -60 Avenue
     const masjid = createMasjidNusantara();
-    masjid.position.set(36, 0, -68);
+    masjid.position.set(32, 0, -78);
+    masjid.rotation.y = 0;
     this.scene.add(masjid);
-    this.colliders.push({ minX: 29, maxX: 43, minZ: -75, maxZ: -61 });
+    this.colliders.push({ minX: 25, maxX: 39, minZ: -85, maxZ: -71 });
 
-    // Interactive Spot Floor Markers
+    // Taman Kota Nusantara (-30, 90) — Full 41.6m x 41.6m Public Park Block with Gazebo, Koi Pond & Playground
+    const tamanKota = createTamanKota(this.maxAnisotropy);
+    tamanKota.position.set(-30, 0, 90);
+    this.scene.add(tamanKota);
+    // Colliders for central Gazebo & Koi Pond inside Taman Kota
+    this.colliders.push({ minX: -35, maxX: -25, minZ: 85, maxZ: 95 });
+    this.colliders.push({ minX: -45.5, maxX: -35.5, minZ: 75.5, maxZ: 85.5 });
+
+    // SMA Negeri 1 Nusantara (30, 90) — Full 41.6m x 41.6m School Campus Block with Flagpole Court & U-Shaped Building
+    const sekolah = createSekolahNusantara(this.maxAnisotropy);
+    sekolah.position.set(30, 0, 90);
+    this.scene.add(sekolah);
+    // Colliders for U-shaped school building wings & rear main hall (leaving courtyard & gate open!)
+    this.colliders.push({ minX: 13.5, maxX: 46.5, minZ: 95.5, maxZ: 105.5 });
+    this.colliders.push({ minX: 12.0, maxX: 19.5, minZ: 79.5, maxZ: 97.0 });
+    this.colliders.push({ minX: 40.5, maxX: 48.0, minZ: 79.5, maxZ: 97.0 });
+
+    // Interactive Spot Floor Rings (placed on the sidewalk in front of each venue)
     INTERACTABLE_SPOTS.forEach((spot) => {
       const markerColor =
         spot.category === 'bengkel'
@@ -475,22 +614,40 @@ export class CityEngine {
         })
       );
       ring.rotation.x = -Math.PI / 2;
-      ring.position.set(spot.position.x, 0.05, spot.position.z);
+      ring.position.set(spot.position.x, 0.1, spot.position.z);
       this.scene.add(ring);
     });
 
-    // 6. Ruko Shophouses & Sudirman Glass Office Buildings
+    // 7. Neatly Aligned Ruko Shophouses & Sudirman Office Towers inside City Blocks
     const rukoColors = ['#f1f5f9', '#fef3c7', '#e0f2fe', '#ffedd5', '#f3e8ff'];
-    const rukoPlacements: { x: number; z: number; w: number; h: number; d: number; colorIdx: number }[] = [
-      { x: -64, z: -24, w: 12, h: 16, d: 12, colorIdx: 0 },
-      { x: -64, z: -64, w: 16, h: 28, d: 16, colorIdx: 2 },
-      { x: -28, z: -66, w: 18, h: 22, d: 12, colorIdx: 1 },
-      { x: 64, z: -26, w: 14, h: 14, d: 14, colorIdx: 3 },
-      { x: 64, z: 26, w: 14, h: 18, d: 14, colorIdx: 4 },
-      { x: -28, z: 66, w: 20, h: 11, d: 11, colorIdx: 1 },
-      { x: 28, z: 66, w: 20, h: 12, d: 11, colorIdx: 0 },
-      { x: 64, z: 64, w: 15, h: 15, d: 15, colorIdx: 2 },
-      { x: -64, z: 64, w: 15, h: 20, d: 15, colorIdx: 3 },
+    const rukoPlacements: {
+      x: number;
+      z: number;
+      w: number;
+      h: number;
+      d: number;
+      colorIdx: number;
+    }[] = [
+      // Inner NW Block (-30, -30)
+      { x: -36, z: -42, w: 14, h: 20, d: 12, colorIdx: 0 },
+      { x: -42, z: -20, w: 12, h: 16, d: 14, colorIdx: 2 },
+      // Inner SW Block (-30, 30)
+      { x: -42, z: 38, w: 14, h: 15, d: 14, colorIdx: 1 },
+      { x: -20, z: 42, w: 14, h: 12, d: 12, colorIdx: 3 },
+      // Inner NE Block (30, -30)
+      { x: 32, z: -40, w: 16, h: 22, d: 12, colorIdx: 2 },
+      // Inner SE Block (30, 30)
+      { x: 36, z: 38, w: 15, h: 16, d: 14, colorIdx: 4 },
+      // Outer Sudirman Skyscraper District (-90, -90 & -30, -90)
+      { x: -90, z: -90, w: 20, h: 34, d: 20, colorIdx: 2 },
+      { x: -32, z: -90, w: 20, h: 28, d: 16, colorIdx: 0 },
+      { x: -96, z: 42, w: 14, h: 22, d: 14, colorIdx: 1 },
+      // East District (90, -30 & 90, -90 & 90, 90) — keeping (90, 30) 100% dedicated to Taman Tugu Surabaya!
+      { x: 90, z: -32, w: 16, h: 20, d: 16, colorIdx: 3 },
+      { x: 90, z: -90, w: 18, h: 24, d: 18, colorIdx: 2 },
+      { x: 90, z: 90, w: 16, h: 16, d: 16, colorIdx: 4 },
+      // South Kampung Merdeka (-90, 90) — keeping (-30, 90) for Taman Kota & (30, 90) for SMA Negeri 1!
+      { x: -90, z: 90, w: 16, h: 14, d: 16, colorIdx: 0 },
     ];
 
     rukoPlacements.forEach((b) => {
@@ -534,20 +691,23 @@ export class CityEngine {
       });
     });
 
-    // 7. Streetlamps & Indonesian Merah-Putih Flagpoles
+    // 8. Streetlamps & Merah-Putih Pennants Neatly Placed Along Sidewalk Curbs
     const poleMat = new THREE.MeshStandardMaterial({
       color: 0x475569,
       metalness: 0.8,
       roughness: 0.3,
     });
-    for (let dist = -68; dist <= 68; dist += 24) {
-      if (Math.abs(dist) < 22) continue;
+    const lampOffsetsAlongBlock = [-96, -84, -36, -24, 24, 36, 84, 96];
+    for (const dist of lampOffsetsAlongBlock) {
       for (const [lx, lz] of [
-        [9.5, dist],
-        [-9.5, dist],
-        [dist, 9.5],
-        [dist, -9.5],
+        [8.4, dist],
+        [-8.4, dist],
+        [dist, 8.4],
+        [dist, -8.4],
+        [68.4, dist],
+        [-51.6, dist],
       ]) {
+        if (Math.hypot(lx - 60, lz) < 20) continue; // Keep clear of Tugu Surabaya roundabout
         const lampGroup = new THREE.Group();
         const post = new THREE.Mesh(
           new THREE.CylinderGeometry(0.1, 0.14, 5.4, 8),
@@ -570,7 +730,6 @@ export class CityEngine {
         lantern.position.set(0, 5.4, 0);
         lampGroup.add(lantern);
 
-        // Small Merah-Putih Pennant Banner on Lamp Post
         const redFlag = new THREE.Mesh(
           new THREE.BoxGeometry(0.05, 0.45, 0.85),
           new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.6 })
@@ -590,24 +749,88 @@ export class CityEngine {
       }
     }
 
-    // 8. Instanced Tropical Trees & Natural Perimeter Hills (InstancedMesh > 120 trees)
+    // 9. Neatly Organized Boulevard & Park Tropical Trees (100% Clear of Roads & Buildings)
     this.buildInstancedTropicalTrees();
+  }
+
+  private isPositionClearForTree(x: number, z: number): boolean {
+    // 1. Never place a tree on or near any road in ROAD_GRID_LINES
+    for (const r of ROAD_GRID_LINES) {
+      if (Math.abs(x - r) < 8.8 || Math.abs(z - r) < 8.8) return false;
+    }
+    // 2. Keep clear of the central plazas and walkways of Taman Monas (-90, -30), Taman Tugu Surabaya (90, 30), Taman Kota (-30, 90), & Sekolah (30, 90)
+    if (Math.abs(x - -90) < 15.5 && Math.abs(z - -30) < 15.5) return false;
+    if (Math.abs(x - 90) < 15.5 && Math.abs(z - 30) < 15.5) return false;
+    if (Math.abs(x - -30) < 16.5 && Math.abs(z - 90) < 16.5) return false;
+    if (Math.abs(x - 30) < 19.5 && Math.abs(z - 90) < 19.5) return false;
+    if (Math.abs(x - -90) < 5.2 && Math.abs(z - -30) < 22) return false;
+    if (Math.abs(z - -30) < 5.2 && Math.abs(x - -90) < 22) return false;
+    if (Math.abs(x - 90) < 5.2 && Math.abs(z - 30) < 22) return false;
+    if (Math.abs(z - 30) < 5.2 && Math.abs(x - 90) < 22) return false;
+    if (Math.abs(x - -30) < 4.5 && Math.abs(z - 90) < 22) return false;
+
+    // 3. Keep clear of all building colliders & interactive spots
+    for (const c of this.colliders) {
+      if (
+        x > c.minX - 2.5 &&
+        x < c.maxX + 2.5 &&
+        z > c.minZ - 2.5 &&
+        z < c.maxZ + 2.5
+      ) {
+        return false;
+      }
+    }
+    for (const spot of INTERACTABLE_SPOTS) {
+      if (Math.hypot(x - spot.position.x, z - spot.position.z) < 6.5) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private buildInstancedTropicalTrees() {
     const treeCoords: [number, number][] = [];
 
-    // Park & avenue trees
-    for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 8) {
-      treeCoords.push([Math.cos(angle) * 26, Math.sin(angle) * 26]);
+    // 0. Symmetrical Corner Park Trees inside Lahan Taman Tugu Monas (-90, -30), Taman Tugu Surabaya (90, 30), & Taman Kota (-30, 90)
+    for (const [px, pz] of [
+      [-90, -30],
+      [90, 30],
+      [-30, 90],
+    ]) {
+      for (const dx of [-17.5, 17.5]) {
+        for (const dz of [-17.5, 17.5]) {
+          treeCoords.push([px + dx, pz + dz]);
+        }
+      }
     }
 
-    // Natural perimeter tropical forest ring (bounding the island naturally)
-    for (let i = 0; i < 110; i++) {
-      const angle = (i / 110) * Math.PI * 2 + (i % 3) * 0.04;
-      const radius = 92 + (i % 5) * 10;
+    // 1. Neat Boulevard Rows along the outer sidewalk edges (±9.6m from road centers)
+    const boulevardOffsets = [-102, -90, -78, -42, -30, 30, 42, 78, 90, 102];
+    for (const r of [-60, 0, 60]) {
+      for (const along of boulevardOffsets) {
+        for (const side of [-9.6, 9.6]) {
+          const tx1 = r + side;
+          const tz1 = along;
+          if (this.isPositionClearForTree(tx1, tz1)) {
+            treeCoords.push([tx1, tz1]);
+          }
+
+          const tx2 = along;
+          const tz2 = r + side;
+          if (this.isPositionClearForTree(tx2, tz2)) {
+            treeCoords.push([tx2, tz2]);
+          }
+        }
+      }
+    }
+
+    // 2. Outer Greenbelt & Coastal Perimeter Forest Ring (Radius 148m..195m)
+    for (let i = 0; i < 120; i++) {
+      const angle = (i / 120) * Math.PI * 2;
+      const radius = 150 + (i % 4) * 11;
       const tx = Math.cos(angle) * radius;
       const tz = Math.sin(angle) * radius;
+      // Leave avenue gateway corridors open
       if (Math.abs(tx) < 12 || Math.abs(tz) < 12) continue;
       treeCoords.push([tx, tz]);
     }
@@ -636,7 +859,7 @@ export class CityEngine {
     const palette = [0x15803d, 0x166534, 0x3f6212, 0x14532d];
 
     treeCoords.forEach(([tx, tz], idx) => {
-      const scale = 0.85 + ((idx * 17) % 30) / 100; // ±15% scale variation
+      const scale = 0.88 + ((idx * 13) % 24) / 100;
       _dummyObj.position.set(tx, 0, tz);
       _dummyObj.rotation.set(0, idx * 1.1, 0);
       _dummyObj.scale.setScalar(scale);
@@ -660,6 +883,189 @@ export class CityEngine {
     this.scene.add(crownInstanced);
   }
 
+  private setupSkyAndWeather() {
+    // 1. 3D MATAHARI (Sun with glowing core & corona halo)
+    this.sunGroup = new THREE.Group();
+    this.sunCoreMat = new THREE.MeshBasicMaterial({
+      color: 0xfef08a,
+      fog: false,
+    });
+    const sunCore = new THREE.Mesh(
+      new THREE.SphereGeometry(8.5, 24, 24),
+      this.sunCoreMat
+    );
+    this.sunGroup.add(sunCore);
+
+    this.sunHaloMat = new THREE.MeshBasicMaterial({
+      color: 0xfacc15,
+      transparent: true,
+      opacity: 0.32,
+      depthWrite: false,
+      fog: false,
+    });
+    const sunHalo = new THREE.Mesh(
+      new THREE.SphereGeometry(13.5, 24, 24),
+      this.sunHaloMat
+    );
+    this.sunGroup.add(sunHalo);
+
+    const sunOuterGlow = new THREE.Mesh(
+      new THREE.SphereGeometry(18.5, 24, 24),
+      new THREE.MeshBasicMaterial({
+        color: 0xfde047,
+        transparent: true,
+        opacity: 0.14,
+        depthWrite: false,
+        fog: false,
+      })
+    );
+    this.sunGroup.add(sunOuterGlow);
+    this.sunGroup.position.set(48, 68, -155);
+    this.scene.add(this.sunGroup);
+
+    // 2. 3D BULAN (Cratered Moon with pale nocturnal halo) & BINTANG (Starfield)
+    this.moonGroup = new THREE.Group();
+    const moonCanvas = document.createElement('canvas');
+    moonCanvas.width = 256;
+    moonCanvas.height = 256;
+    const mCtx = moonCanvas.getContext('2d')!;
+    mCtx.fillStyle = '#f1f5f9';
+    mCtx.fillRect(0, 0, 256, 256);
+    const craters = [
+      [70, 80, 26],
+      [160, 65, 18],
+      [120, 150, 32],
+      [195, 175, 22],
+      [55, 185, 16],
+    ];
+    craters.forEach(([cx, cy, cr]) => {
+      mCtx.fillStyle = '#cbd5e1';
+      mCtx.beginPath();
+      mCtx.arc(cx, cy, cr, 0, Math.PI * 2);
+      mCtx.fill();
+    });
+    const moonTex = new THREE.CanvasTexture(moonCanvas);
+    moonTex.colorSpace = THREE.SRGBColorSpace;
+
+    const moonCore = new THREE.Mesh(
+      new THREE.SphereGeometry(7.5, 24, 24),
+      new THREE.MeshBasicMaterial({
+        map: moonTex,
+        color: 0xf8fafc,
+        fog: false,
+      })
+    );
+    this.moonGroup.add(moonCore);
+
+    const moonHalo = new THREE.Mesh(
+      new THREE.SphereGeometry(11.8, 24, 24),
+      new THREE.MeshBasicMaterial({
+        color: 0xbae6fd,
+        transparent: true,
+        opacity: 0.25,
+        depthWrite: false,
+        fog: false,
+      })
+    );
+    this.moonGroup.add(moonHalo);
+    this.moonGroup.position.set(-48, 64, -150);
+    this.moonGroup.visible = false;
+    this.scene.add(this.moonGroup);
+
+    // Night Starfield Dome
+    const starCount = 360;
+    const starPositions = new Float32Array(starCount * 3);
+    for (let i = 0; i < starCount; i++) {
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.random() * Math.PI * 0.42;
+      const r = 240;
+      starPositions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+      starPositions[i * 3 + 1] = Math.max(28, r * Math.cos(phi));
+      starPositions[i * 3 + 2] = r * Math.sin(phi) * Math.sin(theta);
+    }
+    const starsGeo = new THREE.BufferGeometry();
+    starsGeo.setAttribute(
+      'position',
+      new THREE.BufferAttribute(starPositions, 3)
+    );
+    this.starsPoints = new THREE.Points(
+      starsGeo,
+      new THREE.PointsMaterial({
+        color: 0xf8fafc,
+        size: 1.5,
+        fog: false,
+      })
+    );
+    this.starsPoints.visible = false;
+    this.scene.add(this.starsPoints);
+
+    // 3. 3D AWAN (26 Volumetric Multi-Part Drifting Clouds across Expanded Sky)
+    this.cloudMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.92,
+      metalness: 0.02,
+    });
+    const puffGeo = new THREE.DodecahedronGeometry(1, 1);
+
+    for (let i = 0; i < 26; i++) {
+      const cGroup = new THREE.Group();
+      const puffLayouts: [number, number, number, number][] = [
+        [0, 0, 0, 3.8],
+        [-3.2, -0.4, 0.5, 2.8],
+        [3.3, -0.3, -0.4, 3.0],
+        [-1.5, 1.1, -1.1, 2.6],
+        [1.8, 0.9, 1.2, 2.5],
+      ];
+      puffLayouts.forEach(([px, py, pz, pScale]) => {
+        const puff = new THREE.Mesh(puffGeo, this.cloudMat);
+        puff.position.set(px, py, pz);
+        puff.scale.set(pScale * 1.35, pScale * 0.72, pScale);
+        cGroup.add(puff);
+      });
+
+      const cx = -180 + ((i * 43) % 360);
+      const cy = 32 + (i % 5) * 4.5;
+      const cz = -170 + ((i * 61) % 340);
+      const overallScale = 0.9 + (i % 4) * 0.28;
+      cGroup.position.set(cx, cy, cz);
+      cGroup.scale.setScalar(overallScale);
+      cGroup.rotation.y = (i % 6) * 0.5;
+      this.scene.add(cGroup);
+
+      this.cloudGroups.push({
+        group: cGroup,
+        speed: 1.8 + (i % 4) * 0.65,
+      });
+    }
+
+    // 4. 3D CUACA HUJAN (Slanted Falling Rain Streaks Around Player/Camera)
+    this.rainGroup = new THREE.Group();
+    this.rainGroup.visible = false;
+    const rainVerts = new Float32Array(this.rainDropsCount * 6);
+    for (let i = 0; i < this.rainDropsCount; i++) {
+      const rx = (Math.random() - 0.5) * 68;
+      const ry = Math.random() * 34;
+      const rz = (Math.random() - 0.5) * 68;
+      rainVerts[i * 6] = rx;
+      rainVerts[i * 6 + 1] = ry;
+      rainVerts[i * 6 + 2] = rz;
+      rainVerts[i * 6 + 3] = rx - 0.22;
+      rainVerts[i * 6 + 4] = ry - 1.65;
+      rainVerts[i * 6 + 5] = rz - 0.15;
+    }
+    const rainGeo = new THREE.BufferGeometry();
+    rainGeo.setAttribute('position', new THREE.BufferAttribute(rainVerts, 3));
+    const rainMat = new THREE.LineBasicMaterial({
+      color: 0xbae6fd,
+      transparent: true,
+      opacity: 0.62,
+    });
+    this.rainLines = new THREE.LineSegments(rainGeo, rainMat);
+    this.rainLines.frustumCulled = false;
+    this.rainGroup.add(this.rainLines);
+    this.scene.add(this.rainGroup);
+  }
+
   private spawnPlayer() {
     if (this.playerMesh) {
       this.scene.remove(this.playerMesh);
@@ -671,30 +1077,28 @@ export class CityEngine {
   }
 
   private spawnVehicles() {
-    const initialSpawns: {
+    // Indonesian Left-Hand Traffic (Lajur Kiri: ±3.5m from road centerline)
+    // Parked vehicles sit neatly parallel to the curb at ±4.6m from road centerline
+    const parkedConfigs: {
       type: VehicleType;
       x: number;
       z: number;
       heading: number;
-      isAI: boolean;
-      axis: 'x' | 'z' | 'loop';
-      dir: number;
     }[] = [
-      // Parked right near the player at start so user can hop in immediately!
-      { type: 'bajaj', x: -5, z: 22, heading: Math.PI, isAI: false, axis: 'z', dir: -1 },
-      { type: 'ojol_motor', x: 5, z: 23, heading: Math.PI, isAI: false, axis: 'z', dir: -1 },
-      { type: 'angkot', x: -16, z: 12, heading: Math.PI / 2, isAI: false, axis: 'x', dir: 1 },
-      { type: 'bus_telolet', x: 18, z: -12, heading: -Math.PI / 2, isAI: false, axis: 'x', dir: -1 },
-      // Active AI Traffic on streets
-      { type: 'bajaj', x: 3.5, z: 58, heading: Math.PI, isAI: true, axis: 'z', dir: -1 },
-      { type: 'angkot', x: -3.5, z: -55, heading: 0, isAI: true, axis: 'z', dir: 1 },
-      { type: 'ojol_motor', x: -55, z: 3.5, heading: Math.PI / 2, isAI: true, axis: 'x', dir: 1 },
-      { type: 'bus_telolet', x: 55, z: -3.5, heading: -Math.PI / 2, isAI: true, axis: 'x', dir: -1 },
-      { type: 'polisi', x: -48, z: -35, heading: 0, isAI: true, axis: 'loop', dir: 1 },
-      { type: 'polisi', x: 48, z: 35, heading: Math.PI, isAI: true, axis: 'loop', dir: -1 },
+      // Parked along x = 0 South Boulevard near Player start (-8.5, 28)
+      { type: 'bajaj', x: -4.6, z: 24, heading: Math.PI },
+      { type: 'ojol_motor', x: -4.6, z: 30, heading: Math.PI },
+      // Parked along z = 0 West Boulevard near Warung Pecel Lele
+      { type: 'angkot', x: -28, z: 4.6, heading: -Math.PI / 2 },
+      // Parked along z = 0 East Boulevard near Warung Bakso
+      { type: 'bus_telolet', x: 35, z: -4.6, heading: Math.PI / 2 },
+      // Parked in front of Taman Tugu Monas (-90, -4.6)
+      { type: 'bajaj', x: -84, z: -4.6, heading: Math.PI / 2 },
+      // Parked in front of SMA Negeri 1 Nusantara & Taman Kota (z = 60)
+      { type: 'angkot', x: 24, z: 64.6, heading: -Math.PI / 2 },
     ];
 
-    initialSpawns.forEach((cfg, idx) => {
+    parkedConfigs.forEach((cfg, idx) => {
       const spec = VEHICLE_SPECS[cfg.type];
       const mesh = createVehicleMesh(
         cfg.type,
@@ -708,16 +1112,272 @@ export class CityEngine {
       this.scene.add(mesh);
 
       this.vehicles.push({
-        id: `veh_${idx}`,
+        id: `parked_${idx}`,
         type: cfg.type,
         name: spec.name,
         mesh,
-        speed: cfg.isAI ? 9 : 0,
+        speed: 0,
         heading: cfg.heading,
         steerAngle: 0,
-        isAI: cfg.isAI,
-        aiRouteAxis: cfg.axis,
-        aiDirection: cfg.dir,
+        isAI: false,
+        waypoints: [],
+        waypointIdx: 0,
+        maxSpeed: spec.maxSpeed,
+        acceleration: spec.acceleration,
+        turnSpeed: spec.turnSpeed,
+      });
+    });
+
+    // 18 Active Moving AI Vehicles across all City Corridors (Strictly Left-Hand Lanes ±3.5m!)
+    // spawnProgress (0..1) distributes vehicles along the road segments so traffic is immediately visible everywhere
+    const aiRoutes: {
+      type: VehicleType;
+      startIdx: number;
+      spawnProgress: number;
+      waypoints: { x: number; z: number }[];
+    }[] = [
+      // 1 & 2. Central North-South Protocol Boulevard (x = ±3.5, passing right past the player at spawn!)
+      {
+        type: 'bajaj',
+        startIdx: 0,
+        spawnProgress: 0.35,
+        waypoints: [
+          { x: -3.5, z: 56.5 },
+          { x: -3.5, z: -56.5 },
+          { x: 56.5, z: -56.5 },
+          { x: 56.5, z: 56.5 },
+        ],
+      },
+      {
+        type: 'ojol_motor',
+        startIdx: 2,
+        spawnProgress: 0.55,
+        waypoints: [
+          { x: -3.5, z: 56.5 },
+          { x: -3.5, z: -56.5 },
+          { x: -56.5, z: -56.5 },
+          { x: -56.5, z: 56.5 },
+        ],
+      },
+      // 3 & 4. Central Southbound Protocol Loop (x = +3.5, passing Bengkel Cat & Indoalfa)
+      {
+        type: 'angkot',
+        startIdx: 0,
+        spawnProgress: 0.25,
+        waypoints: [
+          { x: 3.5, z: -56.5 },
+          { x: 3.5, z: 56.5 },
+          { x: -56.5, z: 56.5 },
+          { x: -56.5, z: -56.5 },
+        ],
+      },
+      {
+        type: 'bus_telolet',
+        startIdx: 2,
+        spawnProgress: 0.45,
+        waypoints: [
+          { x: 3.5, z: -56.5 },
+          { x: 3.5, z: 56.5 },
+          { x: 56.5, z: 56.5 },
+          { x: 56.5, z: -56.5 },
+        ],
+      },
+      // 5 & 6. Central West-East Boulevard (z = ±3.5, connecting Monas & Tugu Surabaya through Center)
+      {
+        type: 'polisi',
+        startIdx: 0,
+        spawnProgress: 0.42,
+        waypoints: [
+          { x: -116.5, z: -3.5 },
+          { x: 116.5, z: -3.5 },
+          { x: 116.5, z: 3.5 },
+          { x: -116.5, z: 3.5 },
+        ],
+      },
+      {
+        type: 'ojol_motor',
+        startIdx: 2,
+        spawnProgress: 0.38,
+        waypoints: [
+          { x: -116.5, z: -3.5 },
+          { x: 116.5, z: -3.5 },
+          { x: 116.5, z: 3.5 },
+          { x: -116.5, z: 3.5 },
+        ],
+      },
+      // 7 & 8. Inner Ring Clockwise (Left lane at ±56.5)
+      {
+        type: 'angkot',
+        startIdx: 0,
+        spawnProgress: 0.2,
+        waypoints: [
+          { x: -56.5, z: 56.5 },
+          { x: -56.5, z: -56.5 },
+          { x: 56.5, z: -56.5 },
+          { x: 56.5, z: 56.5 },
+        ],
+      },
+      {
+        type: 'bajaj',
+        startIdx: 2,
+        spawnProgress: 0.6,
+        waypoints: [
+          { x: -56.5, z: 56.5 },
+          { x: -56.5, z: -56.5 },
+          { x: 56.5, z: -56.5 },
+          { x: 56.5, z: 56.5 },
+        ],
+      },
+      // 9 & 10. Inner Ring Counter-Clockwise (Outer Left lane at ±63.5)
+      {
+        type: 'bus_telolet',
+        startIdx: 1,
+        spawnProgress: 0.3,
+        waypoints: [
+          { x: -63.5, z: -63.5 },
+          { x: -63.5, z: 63.5 },
+          { x: 63.5, z: 63.5 },
+          { x: 63.5, z: -63.5 },
+        ],
+      },
+      {
+        type: 'ojol_motor',
+        startIdx: 3,
+        spawnProgress: 0.5,
+        waypoints: [
+          { x: -63.5, z: -63.5 },
+          { x: -63.5, z: 63.5 },
+          { x: 63.5, z: 63.5 },
+          { x: 63.5, z: -63.5 },
+        ],
+      },
+      // 11 & 12. School (SMAN 1) & Taman Kota Nusantara South Corridor (z = 56.5 / 63.5)
+      {
+        type: 'angkot',
+        startIdx: 1,
+        spawnProgress: 0.4,
+        waypoints: [
+          { x: -56.5, z: 116.5 },
+          { x: -56.5, z: 56.5 },
+          { x: 56.5, z: 56.5 },
+          { x: 56.5, z: 116.5 },
+        ],
+      },
+      {
+        type: 'bus_telolet',
+        startIdx: 2,
+        spawnProgress: 0.5,
+        waypoints: [
+          { x: -56.5, z: 116.5 },
+          { x: 56.5, z: 116.5 },
+          { x: 56.5, z: 63.5 },
+          { x: -56.5, z: 63.5 },
+        ],
+      },
+      // 13 & 14. West Taman Monas Loop (passing right in front of Lapangan Monas at x = -90)
+      {
+        type: 'bajaj',
+        startIdx: 0,
+        spawnProgress: 0.5,
+        waypoints: [
+          { x: -3.5, z: -3.5 },
+          { x: -3.5, z: -56.5 },
+          { x: -116.5, z: -56.5 },
+          { x: -116.5, z: -3.5 },
+        ],
+      },
+      {
+        type: 'angkot',
+        startIdx: 2,
+        spawnProgress: 0.45,
+        waypoints: [
+          { x: -3.5, z: -3.5 },
+          { x: -3.5, z: -56.5 },
+          { x: -116.5, z: -56.5 },
+          { x: -116.5, z: -3.5 },
+        ],
+      },
+      // 15 & 16. East Taman Tugu Surabaya Loop (passing right in front of Taman Tugu Surabaya at x = 90)
+      {
+        type: 'ojol_motor',
+        startIdx: 0,
+        spawnProgress: 0.45,
+        waypoints: [
+          { x: 3.5, z: 3.5 },
+          { x: 3.5, z: 56.5 },
+          { x: 116.5, z: 56.5 },
+          { x: 116.5, z: 3.5 },
+        ],
+      },
+      {
+        type: 'bajaj',
+        startIdx: 2,
+        spawnProgress: 0.5,
+        waypoints: [
+          { x: 3.5, z: 3.5 },
+          { x: 3.5, z: 56.5 },
+          { x: 116.5, z: 56.5 },
+          { x: 116.5, z: 3.5 },
+        ],
+      },
+      // 17. North Masjid Agung Loop
+      {
+        type: 'bajaj',
+        startIdx: 0,
+        spawnProgress: 0.4,
+        waypoints: [
+          { x: -3.5, z: -63.5 },
+          { x: -3.5, z: -116.5 },
+          { x: 56.5, z: -116.5 },
+          { x: 56.5, z: -63.5 },
+        ],
+      },
+      // 18. Outer Ring Police Patrol
+      {
+        type: 'polisi',
+        startIdx: 1,
+        spawnProgress: 0.5,
+        waypoints: [
+          { x: -116.5, z: 116.5 },
+          { x: -116.5, z: -116.5 },
+          { x: 116.5, z: -116.5 },
+          { x: 116.5, z: 116.5 },
+        ],
+      },
+    ];
+
+    aiRoutes.forEach((route, idx) => {
+      const spec = VEHICLE_SPECS[route.type];
+      const wp0 = route.waypoints[route.startIdx % route.waypoints.length];
+      const wp1 = route.waypoints[(route.startIdx + 1) % route.waypoints.length];
+      const initialHeading = Math.atan2(wp1.x - wp0.x, wp1.z - wp0.z);
+
+      // Interpolate initial position along the segment so vehicles start spread out in mid-drive
+      const startX = THREE.MathUtils.lerp(wp0.x, wp1.x, route.spawnProgress);
+      const startZ = THREE.MathUtils.lerp(wp0.z, wp1.z, route.spawnProgress);
+
+      const mesh = createVehicleMesh(
+        route.type,
+        spec.color,
+        spec.plate,
+        this.maxAnisotropy,
+        this.isSoftwareGl
+      );
+      mesh.position.set(startX, 0, startZ);
+      mesh.rotation.y = initialHeading;
+      this.scene.add(mesh);
+
+      this.vehicles.push({
+        id: `ai_${idx}`,
+        type: route.type,
+        name: spec.name,
+        mesh,
+        speed: 12,
+        heading: initialHeading,
+        steerAngle: 0,
+        isAI: true,
+        waypoints: route.waypoints,
+        waypointIdx: (route.startIdx + 1) % route.waypoints.length,
         maxSpeed: spec.maxSpeed,
         acceleration: spec.acceleration,
         turnSpeed: spec.turnSpeed,
@@ -726,37 +1386,135 @@ export class CityEngine {
   }
 
   private spawnPedestrians() {
-    const shirtPalette = [0x16a34a, 0xdc2626, 0x2563eb, 0xd97706, 0x9333ea, 0x0891b2];
+    const shirtPalette = [0x16a34a, 0xdc2626, 0x2563eb, 0xd97706, 0x9333ea, 0x0891b2, 0xe11d48, 0x0d9488];
     const pantsPalette = [0x1e293b, 0x334155, 0x0f172a, 0x422006];
 
-    for (let i = 0; i < 18; i++) {
+    // Helper to spawn a pedestrian along a closed loop of waypoints with staggered position & direction
+    const addLoopPedestrian = (
+      waypoints: { x: number; z: number }[],
+      edgeIdx: number,
+      edgeProgress: number,
+      archetype: PedestrianArchetype,
+      colorSeed: number,
+      reverse = false
+    ) => {
+      const ordered = reverse ? [...waypoints].reverse() : waypoints;
+      const wp0 = ordered[edgeIdx % ordered.length];
+      const wp1 = ordered[(edgeIdx + 1) % ordered.length];
+      const startX = THREE.MathUtils.lerp(wp0.x, wp1.x, edgeProgress);
+      const startZ = THREE.MathUtils.lerp(wp0.z, wp1.z, edgeProgress);
+      const heading = Math.atan2(wp1.x - wp0.x, wp1.z - wp0.z);
+
       const npc = createNPCPedestrian(
-        shirtPalette[i % shirtPalette.length],
-        pantsPalette[i % pantsPalette.length]
+        shirtPalette[colorSeed % shirtPalette.length],
+        pantsPalette[colorSeed % pantsPalette.length],
+        archetype
       );
-      const alongX = i % 2 === 0;
-      const sideOffset = i % 4 < 2 ? 8.8 : -8.8;
-      const posAlong = -60 + (i * 13) % 120;
-
-      const x = alongX ? posAlong : sideOffset;
-      const z = alongX ? sideOffset : posAlong;
-      const heading = alongX ? (i % 3 === 0 ? Math.PI / 2 : -Math.PI / 2) : i % 3 === 0 ? 0 : Math.PI;
-
-      npc.position.set(x, 0, z);
+      npc.position.set(startX, 0, startZ);
       npc.rotation.y = heading;
       this.scene.add(npc);
 
       this.pedestrians.push({
         mesh: npc,
         heading,
-        speed: 2.2 + (i % 3) * 0.4,
-        walkCycle: i * 0.7,
-        boundsMinX: alongX ? -70 : sideOffset - 1,
-        boundsMaxX: alongX ? 70 : sideOffset + 1,
-        boundsMinZ: alongX ? sideOffset - 1 : -70,
-        boundsMaxZ: alongX ? sideOffset + 1 : 70,
+        speed: 2.1 + (colorSeed % 4) * 0.32,
+        walkCycle: colorSeed * 0.85,
+        waypoints: ordered,
+        waypointIdx: (edgeIdx + 1) % ordered.length,
       });
-    }
+    };
+
+    // 1. Sidewalk Pedestrians around 12 City Blocks (3 pedestrians per block = 36 sidewalk NPCs)
+    // Archetypes are matched to each district (School, Masjid, Culinary, Sudirman, Parks)
+    const blockConfigs: {
+      bx: number;
+      bz: number;
+      archetypes: [PedestrianArchetype, PedestrianArchetype, PedestrianArchetype];
+    }[] = [
+      // Inner Central Blocks (Warung Pecel, Bakso, Indoalfa, Bengkel)
+      { bx: -30, bz: 30, archetypes: ['ojol', 'warga', 'pekerja_batik'] },
+      { bx: 30, bz: -30, archetypes: ['warga', 'ojol', 'pekerja_batik'] },
+      { bx: -30, bz: -30, archetypes: ['pekerja_batik', 'ojol', 'warga'] },
+      { bx: 30, bz: 30, archetypes: ['warga', 'ojol', 'warga'] },
+      // Education & Public Park Blocks (SMA Negeri 1 & Taman Kota Nusantara)
+      { bx: 30, bz: 90, archetypes: ['pelajar_sma', 'pelajar_sma', 'pekerja_batik'] },
+      { bx: -30, bz: 90, archetypes: ['pelajar_sma', 'warga', 'warga'] },
+      // Landmark Park Blocks (Taman Tugu Monas & Taman Tugu Surabaya)
+      { bx: -90, bz: -30, archetypes: ['pekerja_batik', 'warga', 'ojol'] },
+      { bx: 90, bz: 30, archetypes: ['warga', 'pekerja_batik', 'ojol'] },
+      // Religious & Business Blocks (Masjid Agung, Alfamaret, Sudirman)
+      { bx: 30, bz: -90, archetypes: ['santri', 'santri', 'warga'] },
+      { bx: -90, bz: 30, archetypes: ['ojol', 'warga', 'pelajar_sma'] },
+      { bx: -30, bz: -90, archetypes: ['pekerja_batik', 'santri', 'warga'] },
+      { bx: 90, bz: -30, archetypes: ['pekerja_batik', 'warga', 'ojol'] },
+    ];
+
+    blockConfigs.forEach((cfg, idx) => {
+      const half = 21.8; // Strictly on the 2.2m block sidewalk frame!
+      const sidewalkLoop = [
+        { x: cfg.bx - half, z: cfg.bz - half },
+        { x: cfg.bx + half, z: cfg.bz - half },
+        { x: cfg.bx + half, z: cfg.bz + half },
+        { x: cfg.bx - half, z: cfg.bz + half },
+      ];
+
+      for (let k = 0; k < 3; k++) {
+        const seed = idx * 3 + k;
+        addLoopPedestrian(
+          sidewalkLoop,
+          (idx + k) % 4,
+          0.22 + k * 0.28,
+          cfg.archetypes[k],
+          seed,
+          k === 1 // Middle walker goes counter-clockwise so pedestrians pass each other!
+        );
+      }
+    });
+
+    // 2. Interior Park & School Courtyard Strollers (12 additional NPCs inside landmarks!)
+    // a) Jogging & Strolling around Taman Kota Nusantara (-30, 90)
+    const tamanJoggingLoop = [
+      { x: -41, z: 79 },
+      { x: -19, z: 79 },
+      { x: -19, z: 101 },
+      { x: -41, z: 101 },
+    ];
+    addLoopPedestrian(tamanJoggingLoop, 0, 0.3, 'warga', 40, false);
+    addLoopPedestrian(tamanJoggingLoop, 2, 0.6, 'pelajar_sma', 41, false);
+    addLoopPedestrian(tamanJoggingLoop, 1, 0.4, 'warga', 42, true);
+
+    // b) Students in SMA Negeri 1 Nusantara Courtyard (30, 90)
+    const schoolCourtLoop = [
+      { x: 22, z: 76 },
+      { x: 38, z: 76 },
+      { x: 38, z: 87 },
+      { x: 22, z: 87 },
+    ];
+    addLoopPedestrian(schoolCourtLoop, 0, 0.25, 'pelajar_sma', 43, false);
+    addLoopPedestrian(schoolCourtLoop, 2, 0.55, 'pelajar_sma', 44, false);
+    addLoopPedestrian(schoolCourtLoop, 1, 0.45, 'pelajar_sma', 45, true);
+
+    // c) Tourists strolling on Taman Tugu Monas Plaza (-90, -30)
+    const monasPlazaLoop = [
+      { x: -102, z: -42 },
+      { x: -78, z: -42 },
+      { x: -78, z: -18 },
+      { x: -102, z: -18 },
+    ];
+    addLoopPedestrian(monasPlazaLoop, 0, 0.35, 'pekerja_batik', 46, false);
+    addLoopPedestrian(monasPlazaLoop, 2, 0.65, 'warga', 47, true);
+    addLoopPedestrian(monasPlazaLoop, 3, 0.5, 'warga', 48, false);
+
+    // d) Tourists strolling on Taman Tugu Surabaya Plaza (90, 30)
+    const surabayaPlazaLoop = [
+      { x: 78, z: 18 },
+      { x: 102, z: 18 },
+      { x: 102, z: 42 },
+      { x: 78, z: 42 },
+    ];
+    addLoopPedestrian(surabayaPlazaLoop, 0, 0.4, 'warga', 49, false);
+    addLoopPedestrian(surabayaPlazaLoop, 2, 0.5, 'pekerja_batik', 50, true);
+    addLoopPedestrian(surabayaPlazaLoop, 1, 0.3, 'pelajar_sma', 51, false);
   }
 
   private setupMissionVisuals() {
@@ -784,7 +1542,6 @@ export class CityEngine {
     this.missionBeaconGroup.add(this.missionBeaconRing);
     this.scene.add(this.missionBeaconGroup);
 
-    // Overhead 3D GPS Directional Arrow
     this.gpsArrowGroup = new THREE.Group();
     this.gpsArrowGroup.visible = false;
     const arrowCone = new THREE.Mesh(
@@ -878,12 +1635,10 @@ export class CityEngine {
 
   public toggleVehicleEnterExit() {
     if (this.drivenVehicle) {
-      // Exit current vehicle
       const v = this.drivenVehicle;
       this.drivenVehicle = null;
       v.speed = 0;
 
-      // Place player safely to the left side of the vehicle
       this.playerPos.set(
         v.mesh.position.x + Math.cos(v.heading) * 2.2,
         0,
@@ -902,9 +1657,8 @@ export class CityEngine {
       return;
     }
 
-    // Find nearest vehicle within 6.5m
     let nearest: ActiveVehicleInstance | null = null;
-    let bestDist = 6.5;
+    let bestDist = 7.0;
     for (const v of this.vehicles) {
       const dist = Math.hypot(
         v.mesh.position.x - this.playerPos.x,
@@ -935,7 +1689,7 @@ export class CityEngine {
       } else {
         this.showNotification(
           `Mengendarai ${nearest.name}`,
-          'Tekan G untuk Klakson Telolet, Spasi untuk Rem Tangan, F untuk Turun.',
+          'Ikuti lajur kiri jalan raya! Tekan G untuk Klakson Telolet, F untuk Turun.',
           'info'
         );
       }
@@ -943,10 +1697,43 @@ export class CityEngine {
     } else {
       this.showNotification(
         'Tidak Ada Kendaraan di Dekatmu',
-        'Dekati Bajaj, Angkot, atau Motor Ojol atau panggil instan dari Dock Bawah!',
+        'Dekati kendaraan di jalan atau panggil instan dari Garasi di bawah!',
         'warning'
       );
     }
+  }
+
+  private snapPositionToNearestRoadLane(
+    rawX: number,
+    rawZ: number,
+    fallbackHeading: number
+  ): { x: number; z: number; heading: number } {
+    // Find nearest NS or EW road line in ROAD_GRID_LINES so spawned vehicles sit cleanly in a road lane!
+    let bestDist = Infinity;
+    let bestX = rawX;
+    let bestZ = rawZ;
+    let bestHeading = fallbackHeading;
+
+    for (const r of ROAD_GRID_LINES) {
+      const dNS = Math.abs(rawX - r);
+      if (dNS < bestDist) {
+        bestDist = dNS;
+        // Snap to Northbound left lane (r - 3.5)
+        bestX = r - 3.5;
+        bestZ = THREE.MathUtils.clamp(rawZ, -115, 115);
+        bestHeading = Math.PI;
+      }
+      const dEW = Math.abs(rawZ - r);
+      if (dEW < bestDist) {
+        bestDist = dEW;
+        // Snap to Eastbound left lane (r - 3.5)
+        bestX = THREE.MathUtils.clamp(rawX, -115, 115);
+        bestZ = r - 3.5;
+        bestHeading = Math.PI / 2;
+      }
+    }
+
+    return { x: bestX, z: bestZ, heading: bestHeading };
   }
 
   public spawnAndEnterVehicle(type: VehicleType) {
@@ -963,6 +1750,13 @@ export class CityEngine {
       this.drivenVehicle = null;
     }
 
+    // Snap spawned vehicle cleanly onto the nearest road lane!
+    const snapped = this.snapPositionToNearestRoadLane(
+      currentActorPos.x,
+      currentActorPos.z,
+      currentHeading
+    );
+
     const mesh = createVehicleMesh(
       type,
       spec.color,
@@ -970,8 +1764,8 @@ export class CityEngine {
       this.maxAnisotropy,
       this.isSoftwareGl
     );
-    mesh.position.set(currentActorPos.x, 0, currentActorPos.z);
-    mesh.rotation.y = currentHeading;
+    mesh.position.set(snapped.x, 0, snapped.z);
+    mesh.rotation.y = snapped.heading;
     this.scene.add(mesh);
 
     const newVeh: ActiveVehicleInstance = {
@@ -980,11 +1774,11 @@ export class CityEngine {
       name: spec.name,
       mesh,
       speed: 0,
-      heading: currentHeading,
+      heading: snapped.heading,
       steerAngle: 0,
       isAI: false,
-      aiRouteAxis: 'z',
-      aiDirection: 1,
+      waypoints: [],
+      waypointIdx: 0,
       maxSpeed: spec.maxSpeed,
       acceleration: spec.acceleration,
       turnSpeed: spec.turnSpeed,
@@ -992,12 +1786,14 @@ export class CityEngine {
 
     this.vehicles.push(newVeh);
     this.drivenVehicle = newVeh;
+    this.playerPos.set(snapped.x, 0, snapped.z);
+    this.playerHeading = snapped.heading;
     this.playerMesh.visible = false;
     this.cameraOrbitOffset = 0;
 
     soundFX.playTeloletHorn(type === 'bus_telolet' || type === 'angkot');
     this.showNotification(
-      `${spec.name} Siap Jalan!`,
+      `${spec.name} Siap di Lajur Jalan!`,
       spec.subtitle,
       'success'
     );
@@ -1025,7 +1821,6 @@ export class CityEngine {
       ? this.drivenVehicle.mesh.position
       : this.playerPos;
 
-    // Check interactable spots
     for (const spot of INTERACTABLE_SPOTS) {
       const dist = Math.hypot(spot.position.x - pos.x, spot.position.z - pos.z);
       if (dist <= spot.radius) {
@@ -1045,7 +1840,6 @@ export class CityEngine {
           this.wantedStars = 0;
           this.health = this.maxHealth;
           if (this.drivenVehicle) {
-            // Repaint vehicle with a fresh vibrant color
             const freshColors = [0xea580c, 0x0284c7, 0x16a34a, 0xd97706, 0x7c3aed, 0xe11d48];
             const newHex = freshColors[Math.floor(Math.random() * freshColors.length)];
             this.drivenVehicle.mesh.traverse((child) => {
@@ -1064,7 +1858,7 @@ export class CityEngine {
             'success'
           );
         } else {
-          const healAmount = spot.id === 'warung_bakso' ? 100 : 50;
+          const healAmount = spot.id === 'warung_bakso' ? 100 : 65;
           this.health = Math.min(this.maxHealth, this.health + healAmount);
           this.showNotification(
             `Menikmati Sajian di ${spot.name}`,
@@ -1077,7 +1871,6 @@ export class CityEngine {
       }
     }
 
-    // If on foot and not at a spot, perform street punch / action
     if (!this.drivenVehicle) {
       this.playerPunchTimer = 0.4;
       soundFX.playImpactThud();
@@ -1112,37 +1905,134 @@ export class CityEngine {
 
   public setTimeOfDay(time: TimeOfDay) {
     this.timeOfDay = time;
-    if (time === 'siang') {
-      this.scene.background = new THREE.Color(0x7dd3fc);
-      this.scene.fog = new THREE.FogExp2(0x7dd3fc, 0.0042);
-      this.keyLight.color.setHex(0xfffbeb);
-      this.keyLight.intensity = 2.2;
-      this.keyLight.position.set(65, 95, 55);
-      this.hemiLight.color.setHex(0xbae6fd);
+    this.applyAtmosphere();
+  }
+
+  public setWeather(weather: WeatherType) {
+    this.weather = weather;
+    if (weather === 'hujan') {
+      soundFX.playThunderRumble();
+      this.showNotification(
+        'Cuaca Hujan Guyur Kota Raya!',
+        'Aspal jalanan menjadi basah & mengkilap. Awan mendung menyelimuti langit.',
+        'info'
+      );
+    } else {
+      soundFX.playInteractChime();
+      this.showNotification(
+        'Cuaca Cerah Kembali',
+        'Langit Kota Raya kembali cerah.',
+        'info'
+      );
+    }
+    this.applyAtmosphere();
+    this.broadcastHud(true);
+  }
+
+  private applyAtmosphere() {
+    const isRain = this.weather === 'hujan';
+    this.rainGroup.visible = isRain;
+
+    for (const mat of this.roadMaterials) {
+      mat.roughness = isRain ? 0.16 : 0.82;
+      mat.metalness = isRain ? 0.48 : 0.08;
+      mat.needsUpdate = true;
+    }
+
+    if (this.timeOfDay === 'siang') {
+      const skyHex = isRain ? 0x475569 : 0x7dd3fc;
+      this.scene.background = new THREE.Color(skyHex);
+      this.scene.fog = new THREE.FogExp2(skyHex, isRain ? 0.0055 : 0.0028);
+
+      this.keyLight.color.setHex(isRain ? 0xcbd5e1 : 0xfffbeb);
+      this.keyLight.intensity = isRain ? 1.15 : 2.2;
+      this.keyLight.position.set(85, 125, 75);
+
+      this.hemiLight.color.setHex(isRain ? 0x64748b : 0xbae6fd);
       this.hemiLight.groundColor.setHex(0x3f6212);
-      this.hemiLight.intensity = 0.85;
-      this.streetLampBulbs.forEach((m) => (m.emissiveIntensity = 0.2));
-    } else if (time === 'senja') {
-      this.scene.background = new THREE.Color(0xfb923c);
-      this.scene.fog = new THREE.FogExp2(0xfb923c, 0.005);
-      this.keyLight.color.setHex(0xf97316);
-      this.keyLight.intensity = 1.85;
-      this.keyLight.position.set(-85, 38, 45);
-      this.hemiLight.color.setHex(0xfdba74);
+      this.hemiLight.intensity = isRain ? 0.65 : 0.85;
+
+      this.sunGroup.visible = !isRain;
+      this.sunGroup.position.set(48, 68, -155);
+      this.sunCoreMat.color.setHex(0xfef08a);
+      this.sunHaloMat.color.setHex(0xfacc15);
+
+      this.moonGroup.visible = false;
+      this.starsPoints.visible = false;
+      this.cloudMat.color.setHex(isRain ? 0x475569 : 0xffffff);
+      this.streetLampBulbs.forEach((m) => (m.emissiveIntensity = isRain ? 1.1 : 0.2));
+    } else if (this.timeOfDay === 'senja') {
+      const skyHex = isRain ? 0x334155 : 0xfb923c;
+      this.scene.background = new THREE.Color(skyHex);
+      this.scene.fog = new THREE.FogExp2(skyHex, isRain ? 0.006 : 0.0032);
+
+      this.keyLight.color.setHex(isRain ? 0x94a3b8 : 0xf97316);
+      this.keyLight.intensity = isRain ? 0.95 : 1.85;
+      this.keyLight.position.set(-105, 45, 55);
+
+      this.hemiLight.color.setHex(isRain ? 0x475569 : 0xfdba74);
       this.hemiLight.groundColor.setHex(0x431407);
       this.hemiLight.intensity = 0.7;
-      this.streetLampBulbs.forEach((m) => (m.emissiveIntensity = 1.2));
+
+      this.sunGroup.visible = !isRain;
+      this.sunGroup.position.set(-72, 32, -145);
+      this.sunCoreMat.color.setHex(0xfed7aa);
+      this.sunHaloMat.color.setHex(0xea580c);
+
+      this.moonGroup.visible = false;
+      this.starsPoints.visible = false;
+      this.cloudMat.color.setHex(isRain ? 0x334155 : 0xfed7aa);
+      this.streetLampBulbs.forEach((m) => (m.emissiveIntensity = 1.4));
     } else {
-      // Malam Pasar Malam
-      this.scene.background = new THREE.Color(0x090d16);
-      this.scene.fog = new THREE.FogExp2(0x090d16, 0.0055);
+      const skyHex = isRain ? 0x060911 : 0x090d16;
+      this.scene.background = new THREE.Color(skyHex);
+      this.scene.fog = new THREE.FogExp2(skyHex, isRain ? 0.0065 : 0.0036);
+
       this.keyLight.color.setHex(0x60a5fa);
-      this.keyLight.intensity = 0.65;
-      this.keyLight.position.set(30, 80, -40);
+      this.keyLight.intensity = isRain ? 0.45 : 0.65;
+      this.keyLight.position.set(40, 100, -50);
+
       this.hemiLight.color.setHex(0x1e293b);
       this.hemiLight.groundColor.setHex(0x0f172a);
       this.hemiLight.intensity = 0.5;
+
+      this.sunGroup.visible = false;
+      this.moonGroup.visible = !isRain;
+      this.starsPoints.visible = !isRain;
+      this.cloudMat.color.setHex(isRain ? 0x1e293b : 0x475569);
       this.streetLampBulbs.forEach((m) => (m.emissiveIntensity = 2.4));
+    }
+  }
+
+  private updateSkyAndWeather(dt: number) {
+    const windMultiplier = this.weather === 'hujan' ? 2.2 : 1.0;
+    for (const c of this.cloudGroups) {
+      c.group.position.x += c.speed * windMultiplier * dt;
+      if (c.group.position.x > 185) {
+        c.group.position.x = -185;
+      }
+    }
+
+    if (this.weather === 'hujan' && this.rainGroup.visible) {
+      const activePos = this.drivenVehicle
+        ? this.drivenVehicle.mesh.position
+        : this.playerPos;
+      this.rainGroup.position.set(activePos.x, 0, activePos.z);
+
+      const posAttr = this.rainLines.geometry.attributes
+        .position as THREE.BufferAttribute;
+      const arr = posAttr.array as Float32Array;
+      const fallStep = 36 * dt;
+
+      for (let i = 0; i < this.rainDropsCount; i++) {
+        let yTop = arr[i * 6 + 1] - fallStep;
+        if (yTop < 0.2) {
+          yTop = 32 + Math.random() * 4;
+        }
+        arr[i * 6 + 1] = yTop;
+        arr[i * 6 + 4] = yTop - 1.65;
+      }
+      posAttr.needsUpdate = true;
     }
   }
 
@@ -1170,7 +2060,18 @@ export class CityEngine {
   }
 
   public teleportToLandmark(x: number, z: number, label: string) {
-    const targetHeading = label.includes('Surabaya') ? Math.PI / 2 : Math.PI;
+    // Orient player/vehicle toward the landmark they teleported to
+    let targetHeading = Math.PI;
+    if (
+      label.includes('Surabaya') ||
+      label.includes('Taman Kota') ||
+      label.includes('SMA Negeri') ||
+      label.includes('Sekolah')
+    ) {
+      targetHeading = 0; // Face +Z (South) toward the entrance of Taman Surabaya (90,30), Taman Kota (-30,90), or Sekolah (30,90)
+    } else if (label.includes('Monas')) {
+      targetHeading = Math.PI; // Face -Z (North) toward Taman Tugu Monas at (-90, -30)
+    }
     if (this.drivenVehicle) {
       this.drivenVehicle.mesh.position.set(x, 0, z);
       this.drivenVehicle.heading = targetHeading;
@@ -1197,8 +2098,7 @@ export class CityEngine {
   }
 
   private checkBuildingCollision(x: number, z: number, radius: number): boolean {
-    // Keep within island perimeter
-    if (Math.hypot(x, z) > 135) return true;
+    if (Math.hypot(x, z) > 195) return true;
     for (const c of this.colliders) {
       if (
         x + radius > c.minX &&
@@ -1246,7 +2146,6 @@ export class CityEngine {
       this.playerWalkCycle = 0;
     }
 
-    // Jump physics
     if (this.keys['Space'] && this.playerPos.y <= 0.01) {
       this.playerVelocityY = 6.8;
     }
@@ -1262,7 +2161,6 @@ export class CityEngine {
     this.playerMesh.position.copy(this.playerPos);
     this.playerMesh.rotation.y = this.playerHeading;
 
-    // Animate character limbs
     const limbs = this.playerMesh.userData.limbs;
     if (limbs) {
       const swing = Math.sin(this.playerWalkCycle) * 0.65;
@@ -1296,7 +2194,6 @@ export class CityEngine {
     if (Math.abs(throttle) > 0.05) {
       v.speed += throttle * v.acceleration * dt;
     } else {
-      // Natural rolling friction
       v.speed = THREE.MathUtils.damp(v.speed, 0, 2.2, dt);
     }
 
@@ -1306,7 +2203,6 @@ export class CityEngine {
 
     v.speed = THREE.MathUtils.clamp(v.speed, -v.maxSpeed * 0.45, v.maxSpeed);
 
-    // Steering scales with movement
     if (Math.abs(v.speed) > 0.4) {
       const dirSign = v.speed >= 0 ? 1 : -1;
       v.heading += steer * v.turnSpeed * dirSign * dt;
@@ -1327,7 +2223,6 @@ export class CityEngine {
     }
 
     v.mesh.rotation.y = v.heading;
-    // Subtle chassis body roll during cornering
     v.mesh.rotation.z = THREE.MathUtils.damp(
       v.mesh.rotation.z,
       -steer * (Math.abs(v.speed) / v.maxSpeed) * 0.09,
@@ -1335,7 +2230,6 @@ export class CityEngine {
       dt
     );
 
-    // Spin wheels
     const wheels = v.mesh.userData.wheels as THREE.Object3D[] | undefined;
     if (wheels) {
       wheels.forEach((w) => {
@@ -1343,11 +2237,9 @@ export class CityEngine {
       });
     }
 
-    // Keep player position synced to vehicle
     this.playerPos.copy(v.mesh.position);
     this.playerHeading = v.heading;
 
-    // Engine audio pulse
     if (Math.abs(v.speed) > 1.2) {
       soundFX.playEnginePulse(v.speed / v.maxSpeed, v.type);
     }
@@ -1358,11 +2250,10 @@ export class CityEngine {
       ? this.drivenVehicle.mesh.position
       : this.playerPos;
 
-    // Update AI vehicles
+    // 1. Update AI Vehicles along their strict Left-Hand Road Lane Waypoints
     for (const v of this.vehicles) {
       if (v === this.drivenVehicle) continue;
 
-      // Police siren flash when Wanted > 0
       if (v.type === 'polisi' && v.mesh.userData.sirenLights) {
         const { redLight, blueLight } = v.mesh.userData.sirenLights;
         if (this.wantedStars > 0) {
@@ -1375,65 +2266,95 @@ export class CityEngine {
         }
       }
 
-      if (!v.isAI) continue;
+      if (!v.isAI || v.waypoints.length === 0) continue;
 
-      // If police & player is wanted, steer toward player
-      if (v.type === 'polisi' && this.wantedStars > 0) {
-        const dx = activePos.x - v.mesh.position.x;
-        const dz = activePos.z - v.mesh.position.z;
-        const targetHeading = Math.atan2(dx, dz);
-        let diff = targetHeading - v.heading;
-        while (diff > Math.PI) diff -= Math.PI * 2;
-        while (diff < -Math.PI) diff += Math.PI * 2;
-        v.heading += Math.sign(diff) * Math.min(Math.abs(diff), 1.8 * dt);
-        v.speed = 14;
-      } else {
-        v.speed = 9.5;
-        if (v.aiRouteAxis === 'z') {
-          if (v.mesh.position.z > 74) {
-            v.aiDirection = -1;
-            v.heading = Math.PI;
-            v.mesh.position.x = 3.5;
-          } else if (v.mesh.position.z < -74) {
-            v.aiDirection = 1;
-            v.heading = 0;
-            v.mesh.position.x = -3.5;
-          }
-        } else if (v.aiRouteAxis === 'x') {
-          if (v.mesh.position.x > 74) {
-            v.aiDirection = -1;
-            v.heading = -Math.PI / 2;
-            v.mesh.position.z = -3.5;
-          } else if (v.mesh.position.x < -74) {
-            v.aiDirection = 1;
-            v.heading = Math.PI / 2;
-            v.mesh.position.z = 3.5;
-          }
-        } else {
-          // Outer ring loop
-          if (v.mesh.position.z > 48 && v.heading === 0) {
-            v.heading = Math.PI / 2;
-          } else if (v.mesh.position.x > 48 && Math.abs(v.heading - Math.PI / 2) < 0.2) {
-            v.heading = Math.PI;
-          } else if (v.mesh.position.z < -48 && Math.abs(v.heading - Math.PI) < 0.2) {
-            v.heading = -Math.PI / 2;
-          } else if (v.mesh.position.x < -48 && Math.abs(v.heading + Math.PI / 2) < 0.2) {
-            v.heading = 0;
+      const targetWP = v.waypoints[v.waypointIdx];
+      const dx = targetWP.x - v.mesh.position.x;
+      const dz = targetWP.z - v.mesh.position.z;
+      const distToWP = Math.hypot(dx, dz);
+
+      if (distToWP < 2.2) {
+        v.waypointIdx = (v.waypointIdx + 1) % v.waypoints.length;
+      }
+
+      const nextWP = v.waypoints[v.waypointIdx];
+      const desiredHeading = Math.atan2(
+        nextWP.x - v.mesh.position.x,
+        nextWP.z - v.mesh.position.z
+      );
+
+      let angleDiff = desiredHeading - v.heading;
+      while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+      while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+
+      v.heading += Math.sign(angleDiff) * Math.min(Math.abs(angleDiff), 4.6 * dt);
+
+      // Smart Lane Spacing: Check if another vehicle or the player is directly ahead in the same lane
+      const forwardX = Math.sin(v.heading);
+      const forwardZ = Math.cos(v.heading);
+      let shouldYield = false;
+
+      // Yield for player on foot if directly in front on a crosswalk
+      if (!this.drivenVehicle) {
+        const pdx = this.playerPos.x - v.mesh.position.x;
+        const pdz = this.playerPos.z - v.mesh.position.z;
+        const pDist = Math.hypot(pdx, pdz);
+        if (pDist < 7.0 && pDist > 0.1) {
+          const dot = (pdx * forwardX + pdz * forwardZ) / pDist;
+          if (dot > 0.75) shouldYield = true;
+        }
+      }
+
+      // Yield for any vehicle directly ahead in the same lane (< 9.2m)
+      if (!shouldYield) {
+        for (const other of this.vehicles) {
+          if (other === v) continue;
+          const odx = other.mesh.position.x - v.mesh.position.x;
+          const odz = other.mesh.position.z - v.mesh.position.z;
+          const oDist = Math.hypot(odx, odz);
+          if (oDist < 9.2 && oDist > 0.1) {
+            const dot = (odx * forwardX + odz * forwardZ) / oDist;
+            if (dot > 0.82) {
+              shouldYield = true;
+              break;
+            }
           }
         }
       }
 
+      const baseCruise =
+        v.type === 'polisi' && this.wantedStars > 0
+          ? 18.5
+          : v.type === 'ojol_motor'
+          ? 15.5
+          : v.type === 'polisi'
+          ? 14.5
+          : v.type === 'angkot'
+          ? 13.0
+          : 11.8;
+
+      const targetSpeed = shouldYield ? 0 : baseCruise;
+      v.speed = THREE.MathUtils.damp(v.speed, targetSpeed, shouldYield ? 8.5 : 3.5, dt);
+
       const nx = v.mesh.position.x + Math.sin(v.heading) * v.speed * dt;
       const nz = v.mesh.position.z + Math.cos(v.heading) * v.speed * dt;
-      if (!this.checkBuildingCollision(nx, nz, 1.4)) {
-        v.mesh.position.x = nx;
-        v.mesh.position.z = nz;
-      } else {
-        v.heading += Math.PI * 0.5;
-      }
+      v.mesh.position.set(nx, 0, nz);
       v.mesh.rotation.y = v.heading;
+      v.mesh.rotation.z = THREE.MathUtils.damp(
+        v.mesh.rotation.z,
+        -angleDiff * 0.08,
+        6,
+        dt
+      );
 
-      // Check collision with driven vehicle
+      // Spin AI vehicle wheels
+      const wheels = v.mesh.userData.wheels as THREE.Object3D[] | undefined;
+      if (wheels && v.speed > 0.2) {
+        wheels.forEach((w) => {
+          w.rotation.x += v.speed * dt * 1.6;
+        });
+      }
+
       if (this.drivenVehicle) {
         const distVeh = Math.hypot(
           v.mesh.position.x - this.drivenVehicle.mesh.position.x,
@@ -1455,32 +2376,55 @@ export class CityEngine {
       }
     }
 
-    // Update Pedestrians
+    // 2. Update Sidewalk & Park Pedestrians along their loops
     for (const p of this.pedestrians) {
+      const wp = p.waypoints[p.waypointIdx];
+      const dx = wp.x - p.mesh.position.x;
+      const dz = wp.z - p.mesh.position.z;
+      if (Math.hypot(dx, dz) < 0.8) {
+        p.waypointIdx = (p.waypointIdx + 1) % p.waypoints.length;
+      }
+
+      // Pause politely if player on foot stands right in front of the NPC
+      const distToPlayer = Math.hypot(
+        activePos.x - p.mesh.position.x,
+        activePos.z - p.mesh.position.z
+      );
+      if (!this.drivenVehicle && distToPlayer < 1.9) {
+        p.mesh.rotation.y = Math.atan2(
+          activePos.x - p.mesh.position.x,
+          activePos.z - p.mesh.position.z
+        );
+        const limbs = p.mesh.userData.limbs;
+        if (limbs) {
+          limbs.leftLeg.rotation.x = 0;
+          limbs.rightLeg.rotation.x = 0;
+          limbs.leftArm.rotation.x = 0;
+          limbs.rightArm.rotation.x = 0;
+        }
+        continue;
+      }
+
+      const nextWP = p.waypoints[p.waypointIdx];
+      p.heading = Math.atan2(
+        nextWP.x - p.mesh.position.x,
+        nextWP.z - p.mesh.position.z
+      );
+
       p.mesh.position.x += Math.sin(p.heading) * p.speed * dt;
       p.mesh.position.z += Math.cos(p.heading) * p.speed * dt;
-
-      if (
-        p.mesh.position.x < p.boundsMinX ||
-        p.mesh.position.x > p.boundsMaxX ||
-        p.mesh.position.z < p.boundsMinZ ||
-        p.mesh.position.z > p.boundsMaxZ
-      ) {
-        p.heading += Math.PI;
-      }
       p.mesh.rotation.y = p.heading;
 
-      p.walkCycle += dt * 7;
+      p.walkCycle += dt * (p.speed * 3.1);
       const limbs = p.mesh.userData.limbs;
       if (limbs) {
-        const swing = Math.sin(p.walkCycle) * 0.45;
+        const swing = Math.sin(p.walkCycle) * 0.52;
         limbs.leftLeg.rotation.x = swing;
         limbs.rightLeg.rotation.x = -swing;
-        limbs.leftArm.rotation.x = -swing * 0.6;
-        limbs.rightArm.rotation.x = swing * 0.6;
+        limbs.leftArm.rotation.x = -swing * 0.65;
+        limbs.rightArm.rotation.x = swing * 0.65;
       }
 
-      // If player hits pedestrian at high speed
       if (this.drivenVehicle && Math.abs(this.drivenVehicle.speed) > 10) {
         const distP = Math.hypot(
           p.mesh.position.x - activePos.x,
@@ -1488,8 +2432,6 @@ export class CityEngine {
         );
         if (distP < 1.8) {
           soundFX.playImpactThud();
-          p.mesh.position.x += Math.sin(this.drivenVehicle.heading) * 4.5;
-          p.mesh.position.z += Math.cos(this.drivenVehicle.heading) * 4.5;
           if (this.wantedStars < 3) {
             this.wantedStars += 1;
             this.wantedDecayTimer = 25;
@@ -1532,12 +2474,10 @@ export class CityEngine {
         ? this.activeMission.pickupPos
         : this.activeMission.dropoffPos;
 
-    // Position & animate 3D Beacon
     this.missionBeaconGroup.visible = true;
     this.missionBeaconGroup.position.set(target.x, 0, target.z);
     this.missionBeaconRing.position.y = 0.35 + Math.sin(elapsed * 4) * 0.25;
 
-    // Position overhead GPS arrow above player/vehicle
     const activePos = this.drivenVehicle
       ? this.drivenVehicle.mesh.position
       : this.playerPos;
@@ -1549,9 +2489,8 @@ export class CityEngine {
     );
     this.gpsArrowGroup.rotation.y = angleToTarget;
 
-    // Check arrival
     const dist = Math.hypot(target.x - activePos.x, target.z - activePos.z);
-    if (dist < 4.5) {
+    if (dist < 5.0) {
       if (this.missionStage === 'to_pickup') {
         this.missionStage = 'to_dropoff';
         soundFX.playInteractChime();
@@ -1592,8 +2531,7 @@ export class CityEngine {
       this.cameraOrbitOffset;
 
     if (this.cameraMode === 'top') {
-      // Classic GTA Top-Down Angle
-      _vec3CamDesired.set(activePos.x, 34, activePos.z + 8);
+      _vec3CamDesired.set(activePos.x, 38, activePos.z + 9);
       _vec3CamTarget.set(activePos.x, 0.8, activePos.z);
     } else {
       const distBack =
@@ -1625,7 +2563,6 @@ export class CityEngine {
       );
     }
 
-    // Silky-smooth frame-rate independent exponential damping
     this.camera.position.x = THREE.MathUtils.damp(
       this.camera.position.x,
       _vec3CamDesired.x,
@@ -1645,7 +2582,6 @@ export class CityEngine {
       dt
     );
 
-    // Dynamic FOV speed cue when accelerating in a vehicle
     const targetFov = this.drivenVehicle
       ? 60 + (Math.abs(this.drivenVehicle.speed) / this.drivenVehicle.maxSpeed) * 12
       : 60;
@@ -1667,10 +2603,9 @@ export class CityEngine {
       ? this.drivenVehicle.mesh.position
       : this.playerPos;
 
-    // Check nearby vehicle prompt when on foot
     let nearbyVehiclePrompt: string | null = null;
     if (!this.drivenVehicle) {
-      let bestDist = 6.2;
+      let bestDist = 6.8;
       for (const v of this.vehicles) {
         const d = Math.hypot(
           v.mesh.position.x - activePos.x,
@@ -1683,7 +2618,6 @@ export class CityEngine {
       }
     }
 
-    // Check nearby interactable spot
     let nearbySpot: InteractableSpot | null = null;
     for (const spot of INTERACTABLE_SPOTS) {
       const d = Math.hypot(
@@ -1731,6 +2665,13 @@ export class CityEngine {
           : this.playerHeading,
       },
       targetCoords,
+      trafficCoords: this.vehicles
+        .filter((v) => v.isAI)
+        .map((v) => ({
+          x: Math.round(v.mesh.position.x),
+          z: Math.round(v.mesh.position.z),
+          type: v.type,
+        })),
       completedMissionIds: this.completedMissionIds,
     });
   }
@@ -1767,6 +2708,7 @@ export class CityEngine {
 
     this.updateAITrafficAndPedestrians(dt, elapsed);
     this.updateMissionLogic(dt, elapsed);
+    this.updateSkyAndWeather(dt);
     this.updateCamera(dt);
 
     if (this.wantedStars > 0) {
@@ -1788,7 +2730,6 @@ export class CityEngine {
     this.broadcastHud();
     this.renderer.render(this.scene, this.camera);
 
-    // Pace loops properly on Software WebGL vs Hardware GPU
     if (this.isSoftwareGl) {
       this.afterDraw(this.tick);
     } else {

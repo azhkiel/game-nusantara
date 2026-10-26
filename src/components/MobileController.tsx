@@ -7,11 +7,13 @@ import {
   Utensils,
   Zap,
   ArrowUp,
+  Camera,
 } from 'lucide-react';
-import { HudState, VehicleType } from '../types/game';
+import { CameraMode, HudState, VehicleType } from '../types/game';
 
 interface MobileControllerProps {
   hud: HudState;
+  cameraMode: CameraMode;
   onVirtualControl: (
     forward: number,
     turn: number,
@@ -23,27 +25,28 @@ interface MobileControllerProps {
   onHonkHorn: () => void;
   onContextAction: () => void;
   onSpawnVehicle: (type: VehicleType) => void;
+  onChangeCamera: (mode: CameraMode) => void;
 }
 
 export const MobileController: React.FC<MobileControllerProps> = ({
   hud,
+  cameraMode,
   onVirtualControl,
   onJump,
   onToggleEnterExit,
   onHonkHorn,
   onContextAction,
-  onSpawnVehicle,
+  onChangeCamera,
 }) => {
   const stickBaseRef = useRef<HTMLDivElement | null>(null);
   const activePointerIdRef = useRef<number | null>(null);
 
-  // Stick visual offset in px (-42..42)
+  // Stick visual offset in px
   const [knobOffset, setKnobOffset] = useState<{ x: number; y: number }>({
     x: 0,
     y: 0,
   });
 
-  // Combined input state from Left Stick + Right Pedals/Buttons
   const stickVecRef = useRef<{ forward: number; turn: number }>({
     forward: 0,
     turn: 0,
@@ -65,7 +68,7 @@ export const MobileController: React.FC<MobileControllerProps> = ({
     const finalSprint =
       sprintHeldRef.current ||
       nextSprintLock ||
-      (!hud.inVehicle && stickVecRef.current.forward > 0.88);
+      (!hud.inVehicle && stickVecRef.current.forward > 0.85);
 
     onVirtualControl(finalForward, finalTurn, finalBrake, finalSprint);
   };
@@ -82,7 +85,7 @@ export const MobileController: React.FC<MobileControllerProps> = ({
     const rect = base.getBoundingClientRect();
     const centerX = rect.left + rect.width / 2;
     const centerY = rect.top + rect.height / 2;
-    const maxRadius = rect.width * 0.36; // ~44px
+    const maxRadius = rect.width * 0.38;
 
     const rawDx = clientX - centerX;
     const rawDy = clientY - centerY;
@@ -94,14 +97,12 @@ export const MobileController: React.FC<MobileControllerProps> = ({
     const ky = Math.sin(angle) * clampedDist;
     setKnobOffset({ x: kx, y: ky });
 
-    // Normalize to -1..1
-    const normX = kx / maxRadius; // left is negative, right is positive
-    const normY = ky / maxRadius; // up is negative, down is positive
+    const normX = kx / maxRadius;
+    const normY = ky / maxRadius;
 
-    // In CityEngine: forward > 0 moves forward, turn > 0 turns Left (+A), turn < 0 turns Right (-D)
     stickVecRef.current = {
-      forward: Math.abs(normY) > 0.12 ? -normY : 0,
-      turn: Math.abs(normX) > 0.12 ? -normX : 0,
+      forward: Math.abs(normY) > 0.1 ? -normY : 0,
+      turn: Math.abs(normX) > 0.1 ? -normX : 0,
     };
     syncControlToEngine();
   };
@@ -132,65 +133,68 @@ export const MobileController: React.FC<MobileControllerProps> = ({
     resetStick();
   };
 
+  const cycleCamera = () => {
+    const order: CameraMode[] = ['chase', 'far', 'top'];
+    const next = order[(order.indexOf(cameraMode) + 1) % order.length];
+    onChangeCamera(next);
+  };
+
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-12 z-30 flex items-end justify-between px-4 sm:px-7 select-none touch-none">
-      {/* LEFT THUMB ZONE: Virtual Analog Joystick (Maju / Mundur / Belok Kiri-Kanan) */}
-      <div className="pointer-events-auto flex flex-col items-center gap-1.5">
+    <div className="pointer-events-none fixed inset-x-0 bottom-4 z-30 flex items-end justify-between px-3 sm:px-6 select-none touch-none">
+      {/* LEFT THUMB ZONE: Minimalist Translucent GTA Analog Stick */}
+      <div className="pointer-events-auto flex flex-col items-start gap-2">
+        {/* Tiny Floating Camera Mode Switch */}
+        <button
+          onPointerDown={(e) => {
+            e.stopPropagation();
+            cycleCamera();
+          }}
+          aria-label="Ganti Sudut Kamera"
+          className="flex h-8 w-8 items-center justify-center rounded-full bg-black/30 active:bg-white/30 border border-white/20 text-white shadow-md backdrop-blur-[2px] touch-none cursor-pointer"
+        >
+          <Camera className="h-4 w-4" />
+        </button>
+
+        {/* Clean Translucent Analog Stick (No text labels blocking screen) */}
         <div
           ref={stickBaseRef}
           onPointerDown={handleStickPointerDown}
           onPointerMove={handleStickPointerMove}
           onPointerUp={handleStickPointerUp}
           onPointerCancel={handleStickPointerUp}
-          className="relative flex h-32 w-32 items-center justify-center rounded-full bg-slate-950/90 border-2 border-slate-700/90 shadow-2xl active:border-amber-400 touch-none"
+          className="relative flex h-28 w-28 sm:h-32 sm:w-32 items-center justify-center rounded-full bg-black/25 active:bg-black/35 border-2 border-white/25 shadow-xl backdrop-blur-[2px] touch-none cursor-pointer"
         >
-          {/* Crosshair & Directional Labels */}
-          <span className="pointer-events-none absolute top-2 text-[9px] font-bold tracking-wider text-slate-400">
-            MAJU
-          </span>
-          <span className="pointer-events-none absolute bottom-2 text-[9px] font-bold tracking-wider text-slate-400">
-            MUNDUR
-          </span>
-          <span className="pointer-events-none absolute left-2 text-[9px] font-bold tracking-wider text-slate-400">
-            KIRI
-          </span>
-          <span className="pointer-events-none absolute right-2 text-[9px] font-bold tracking-wider text-slate-400">
-            KANAN
-          </span>
-
-          {/* Inner Guide Circle */}
-          <div className="pointer-events-none h-16 w-16 rounded-full border border-slate-800/90" />
+          {/* Subtle Inner Crosshair Ring */}
+          <div className="pointer-events-none h-14 w-14 rounded-full border border-white/15" />
+          <div className="pointer-events-none absolute h-2 w-2 rounded-full bg-white/30" />
 
           {/* Draggable Analog Thumb Knob */}
           <div
-            className="pointer-events-none flex h-13 w-13 items-center justify-center rounded-full bg-amber-500 border-2 border-amber-200 shadow-lg transition-transform duration-75"
+            className="pointer-events-none absolute flex h-12 w-12 items-center justify-center rounded-full bg-white/35 border-2 border-white/60 shadow-md backdrop-blur-xs transition-transform duration-75"
             style={{
               transform: `translate(${knobOffset.x}px, ${knobOffset.y}px)`,
             }}
           >
-            <div className="h-4 w-4 rounded-full bg-slate-950/40" />
+            <div className="h-4 w-4 rounded-full bg-amber-400/80 shadow-xs" />
           </div>
         </div>
-        <span className="rounded bg-slate-950/85 px-2 py-0.5 text-[10px] font-semibold text-slate-300 border border-slate-800">
-          {hud.inVehicle ? 'Setir & Arah' : 'Analog Jalan / Lari'}
-        </span>
       </div>
 
-      {/* RIGHT THUMB ZONE: Context-Sensitive GTA Action Buttons (On Foot vs Driving) */}
+      {/* RIGHT THUMB ZONE: Clean Translucent GTA Action Controls */}
       {hud.inVehicle ? (
-        /* MODE BERKENDARA: Pedal Gas, Rem/Mundur, Rem Tangan, Klakson Telolet, Turun */
+        /* GTA DRIVING CONTROLS: Gas Pedal, Brake/Reverse Pedal, Drift/Brake, Horn, Exit */
         <div className="pointer-events-auto flex flex-col items-end gap-2">
-          {/* Top Action Row: Turun Kendaraan & Klakson Telolet */}
+          {/* Top Mini Buttons: Telolet Horn & Exit Car */}
           <div className="flex items-center gap-2">
             <button
               onPointerDown={(e) => {
                 e.stopPropagation();
                 onHonkHorn();
               }}
-              className="flex h-11 items-center gap-1.5 rounded-xl bg-amber-500/95 active:bg-amber-400 border border-amber-300 px-3 text-xs font-bold text-slate-950 shadow-lg touch-none cursor-pointer"
+              title="Klakson Telolet"
+              className="flex h-10 w-10 items-center justify-center rounded-full bg-amber-500/30 active:bg-amber-400/60 border border-amber-300/40 text-amber-200 shadow-md backdrop-blur-[2px] active:scale-95 touch-none cursor-pointer"
             >
               <Megaphone className="h-4 w-4" />
-              <span>TELOLET</span>
             </button>
 
             <button
@@ -198,15 +202,16 @@ export const MobileController: React.FC<MobileControllerProps> = ({
                 e.stopPropagation();
                 onToggleEnterExit();
               }}
-              className="flex h-11 items-center gap-1.5 rounded-xl bg-rose-600/95 active:bg-rose-500 border border-rose-400 px-3 text-xs font-bold text-white shadow-lg touch-none cursor-pointer"
+              title="Turun dari Kendaraan"
+              className="flex h-10 w-10 items-center justify-center rounded-full bg-rose-500/30 active:bg-rose-500/60 border border-rose-300/40 text-rose-200 shadow-md backdrop-blur-[2px] active:scale-95 touch-none cursor-pointer"
             >
               <LogOut className="h-4 w-4" />
-              <span>TURUN</span>
             </button>
           </div>
 
-          {/* Bottom Pedal Row: Rem Tangan, Pedal Mundur, Pedal Gas Besar */}
+          {/* Bottom Pedal Cluster: Handbrake, Reverse, Gas */}
           <div className="flex items-end gap-2">
+            {/* Handbrake / Drift Button */}
             <button
               onPointerDown={(e) => {
                 e.stopPropagation();
@@ -227,16 +232,16 @@ export const MobileController: React.FC<MobileControllerProps> = ({
                   syncControlToEngine();
                 }
               }}
-              className={`flex h-14 w-16 flex-col items-center justify-center rounded-xl border text-[10px] font-bold shadow-xl touch-none cursor-pointer ${
+              className={`flex h-13 w-13 flex-col items-center justify-center rounded-full border text-[10px] font-black shadow-lg backdrop-blur-[2px] touch-none cursor-pointer ${
                 isBraking
-                  ? 'bg-rose-500 border-rose-200 text-white'
-                  : 'bg-slate-900/95 border-slate-700 text-rose-300'
+                  ? 'bg-rose-500/70 border-white text-white scale-95'
+                  : 'bg-rose-500/25 border-rose-400/40 text-rose-200'
               }`}
             >
               <span>REM</span>
-              <span>DRIFT</span>
             </button>
 
+            {/* Reverse / Footbrake Pedal */}
             <button
               onPointerDown={(e) => {
                 e.stopPropagation();
@@ -257,16 +262,17 @@ export const MobileController: React.FC<MobileControllerProps> = ({
                   syncControlToEngine();
                 }
               }}
-              className={`flex h-16 w-16 flex-col items-center justify-center rounded-xl border text-xs font-bold shadow-xl touch-none cursor-pointer ${
+              className={`flex h-16 w-14 flex-col items-center justify-center rounded-2xl border text-xs font-black shadow-lg backdrop-blur-[2px] touch-none cursor-pointer ${
                 activePedal === 'reverse'
-                  ? 'bg-amber-500 border-amber-200 text-slate-950'
-                  : 'bg-slate-900/95 border-slate-700 text-slate-200'
+                  ? 'bg-amber-400/70 border-white text-slate-950 scale-95'
+                  : 'bg-amber-500/25 border-amber-400/40 text-amber-200'
               }`}
             >
               <span className="text-base leading-none">▼</span>
-              <span className="mt-1 text-[10px]">MUNDUR</span>
+              <span className="text-[9px] mt-0.5">MDR</span>
             </button>
 
+            {/* Accelerator / Gas Pedal (Tall & responsive) */}
             <button
               onPointerDown={(e) => {
                 e.stopPropagation();
@@ -287,51 +293,39 @@ export const MobileController: React.FC<MobileControllerProps> = ({
                   syncControlToEngine();
                 }
               }}
-              className={`flex h-22 w-20 flex-col items-center justify-center rounded-2xl border-2 text-sm font-extrabold shadow-2xl touch-none cursor-pointer ${
+              className={`flex h-22 w-16 flex-col items-center justify-center rounded-2xl border-2 text-sm font-black shadow-xl backdrop-blur-[2px] touch-none cursor-pointer ${
                 activePedal === 'gas'
-                  ? 'bg-emerald-400 border-white text-slate-950 scale-95'
-                  : 'bg-emerald-600/95 border-emerald-300 text-white'
+                  ? 'bg-emerald-400/80 border-white text-slate-950 scale-95'
+                  : 'bg-emerald-500/30 border-emerald-400/50 text-emerald-200'
               }`}
             >
-              <span className="text-xl leading-none">▲</span>
-              <span className="mt-1">GAS</span>
+              <span className="text-2xl leading-none">▲</span>
+              <span className="text-[11px] font-black mt-0.5">GAS</span>
             </button>
           </div>
         </div>
       ) : (
-        /* MODE JALAN KAKI: Naik Kendaraan, Panggil Ojol, Lompat, Lari Cepat, Aksi / Beli Makanan */
+        /* GTA ON-FOOT CONTROLS: Sprint, Jump, Action/Punch/Buy, Enter Vehicle */
         <div className="pointer-events-auto flex flex-col items-end gap-2">
-          {/* Top Row: Quick Spawn Ojol & Enter Nearby Vehicle */}
-          <div className="flex items-center gap-2">
-            <button
-              onPointerDown={(e) => {
-                e.stopPropagation();
-                onSpawnVehicle('ojol_motor');
-              }}
-              className="flex h-10 items-center gap-1.5 rounded-xl bg-slate-900/95 active:bg-slate-800 border border-slate-700 px-2.5 text-[11px] font-bold text-emerald-300 shadow-lg touch-none cursor-pointer"
-            >
-              <Car className="h-3.5 w-3.5" />
-              <span>PANGGIL OJOL</span>
-            </button>
+          {/* Enter Nearby Vehicle Button (Only renders or highlights when near vehicle) */}
+          <button
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              onToggleEnterExit();
+            }}
+            className={`flex h-11 items-center gap-1.5 rounded-full px-3.5 text-xs font-bold shadow-lg backdrop-blur-[2px] active:scale-95 touch-none cursor-pointer border ${
+              hud.nearbyVehiclePrompt
+                ? 'bg-amber-500/60 border-amber-300 text-white animate-pulse'
+                : 'bg-black/30 border-white/20 text-white/80'
+            }`}
+          >
+            <LogIn className="h-4 w-4" />
+            <span>{hud.nearbyVehiclePrompt ? 'NAIK' : 'KENDARAAN'}</span>
+          </button>
 
-            <button
-              onPointerDown={(e) => {
-                e.stopPropagation();
-                onToggleEnterExit();
-              }}
-              className={`flex h-11 items-center gap-1.5 rounded-xl border px-3 text-xs font-bold shadow-lg touch-none cursor-pointer ${
-                hud.nearbyVehiclePrompt
-                  ? 'bg-amber-500 border-amber-200 text-slate-950 animate-pulse'
-                  : 'bg-slate-900/95 border-slate-700 text-slate-200'
-              }`}
-            >
-              <LogIn className="h-4 w-4" />
-              <span>{hud.nearbyVehiclePrompt ? 'NAIK!' : 'NAIK [F]'}</span>
-            </button>
-          </div>
-
-          {/* Bottom Action Cluster: Sprint, Jump, Action / Buy Food */}
+          {/* Bottom Action Cluster: Sprint, Jump, Punch/Action */}
           <div className="flex items-end gap-2">
+            {/* Sprint Button */}
             <button
               onPointerDown={(e) => {
                 e.stopPropagation();
@@ -345,48 +339,46 @@ export const MobileController: React.FC<MobileControllerProps> = ({
                 sprintHeldRef.current = false;
                 syncControlToEngine();
               }}
-              className={`flex h-14 w-15 flex-col items-center justify-center rounded-2xl border text-[10px] font-bold shadow-xl touch-none cursor-pointer ${
+              className={`flex h-13 w-13 flex-col items-center justify-center rounded-full border text-[10px] font-bold shadow-lg backdrop-blur-[2px] active:scale-95 touch-none cursor-pointer ${
                 sprintLocked
-                  ? 'bg-sky-500 border-sky-200 text-slate-950'
-                  : 'bg-slate-900/95 border-slate-700 text-sky-300'
+                  ? 'bg-sky-400/70 border-white text-slate-950'
+                  : 'bg-sky-500/20 border-sky-400/30 text-sky-200'
               }`}
             >
               <Zap className="h-4 w-4" />
-              <span className="mt-0.5">{sprintLocked ? 'LARI ON' : 'LARI'}</span>
+              <span className="text-[9px] mt-0.5">LARI</span>
             </button>
 
+            {/* Jump Button */}
             <button
               onPointerDown={(e) => {
                 e.stopPropagation();
                 onJump();
               }}
-              className="flex h-15 w-15 flex-col items-center justify-center rounded-2xl bg-slate-900/95 active:bg-slate-700 border border-slate-600 text-[10px] font-bold text-white shadow-xl touch-none cursor-pointer"
+              className="flex h-14 w-14 flex-col items-center justify-center rounded-full bg-white/15 active:bg-white/35 border border-white/25 text-white shadow-lg backdrop-blur-[2px] active:scale-95 touch-none cursor-pointer"
             >
-              <ArrowUp className="h-4 w-4 text-amber-400" />
-              <span className="mt-0.5">LOMPAT</span>
+              <ArrowUp className="h-5 w-5 text-amber-300" />
             </button>
 
+            {/* Context Action / Punch / Buy Food Button */}
             <button
               onPointerDown={(e) => {
                 e.stopPropagation();
                 onContextAction();
               }}
-              className={`flex h-18 w-18 flex-col items-center justify-center rounded-full border-2 text-xs font-extrabold shadow-2xl touch-none cursor-pointer ${
+              className={`flex h-17 w-17 flex-col items-center justify-center rounded-full border-2 text-xs font-black shadow-xl backdrop-blur-[2px] active:scale-95 touch-none cursor-pointer ${
                 hud.nearbySpot
-                  ? 'bg-emerald-500 border-emerald-200 text-slate-950'
-                  : 'bg-rose-600/95 border-rose-300 text-white active:scale-95'
+                  ? 'bg-emerald-500/60 border-emerald-300 text-white'
+                  : 'bg-white/20 active:bg-white/40 border-white/40 text-white'
               }`}
             >
               {hud.nearbySpot ? (
                 <>
-                  <Utensils className="h-5 w-5" />
-                  <span className="mt-0.5 text-[10px]">BELI</span>
+                  <Utensils className="h-5 w-5 text-emerald-300" />
+                  <span className="text-[9px] font-bold mt-0.5">BELI</span>
                 </>
               ) : (
-                <>
-                  <span className="text-base leading-none">👊</span>
-                  <span className="mt-1 text-[10px]">AKSI</span>
-                </>
+                <span className="text-xl">👊</span>
               )}
             </button>
           </div>

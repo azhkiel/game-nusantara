@@ -2381,5 +2381,227 @@ export function createOuterRiverSystem(): THREE.Group {
   return group;
 }
 
+export interface TrafficLightRef {
+  group: THREE.Group;
+  setState: (state: 'red' | 'yellow' | 'green') => void;
+  getState: () => 'red' | 'yellow' | 'green';
+}
 
+export function createTrafficLightMesh(): TrafficLightRef {
+  const group = new THREE.Group();
+  group.name = 'TrafficLight';
 
+  const steelMat = new THREE.MeshStandardMaterial({
+    color: 0x334155,
+    metalness: 0.75,
+    roughness: 0.35,
+  });
+
+  const housingMat = new THREE.MeshStandardMaterial({
+    color: 0x0f172a,
+    roughness: 0.65,
+    metalness: 0.25,
+  });
+
+  const yellowBorderMat = new THREE.MeshStandardMaterial({
+    color: 0xfacc15,
+    roughness: 0.45,
+    metalness: 0.2,
+  });
+
+  // Vertical Mast Pole
+  const mast = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.12, 0.16, 5.8, 12),
+    steelMat
+  );
+  mast.position.y = 2.9;
+  mast.castShadow = true;
+  group.add(mast);
+
+  // Concrete / Steel Base Plinth
+  const basePlinth = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.24, 0.28, 0.35, 12),
+    steelMat
+  );
+  basePlinth.position.y = 0.175;
+  group.add(basePlinth);
+
+  // Cantilever Horizontal Arm reaching out over road lane (Length 3.8m)
+  const arm = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.09, 0.1, 3.8, 10),
+    steelMat
+  );
+  arm.rotation.z = -Math.PI / 2;
+  arm.position.set(1.9, 5.2, 0);
+  group.add(arm);
+
+  // Diagonal support strut
+  const strut = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.05, 0.05, 1.6, 8),
+    steelMat
+  );
+  strut.rotation.z = -Math.PI / 4;
+  strut.position.set(0.65, 4.65, 0);
+  group.add(strut);
+
+  // Main Overhead Signal Head placed at arm tip (x = 3.6, y = 5.2)
+  const headGroup = new THREE.Group();
+  headGroup.position.set(3.6, 5.2, 0);
+
+  // Backplate with yellow safety border
+  const backplate = new THREE.Mesh(
+    new THREE.BoxGeometry(0.82, 1.88, 0.04),
+    yellowBorderMat
+  );
+  backplate.position.set(0, 0, -0.06);
+  headGroup.add(backplate);
+
+  // Main Signal Housing Body
+  const housing = new THREE.Mesh(
+    new THREE.BoxGeometry(0.64, 1.7, 0.38),
+    housingMat
+  );
+  housing.position.set(0, 0, 0.12);
+  housing.castShadow = true;
+  headGroup.add(housing);
+
+  // 3 Colored Lenses (Red, Yellow, Green)
+  const redMat = new THREE.MeshStandardMaterial({
+    color: 0xef4444,
+    emissive: 0xff0000,
+    emissiveIntensity: 2.5,
+    roughness: 0.25,
+    metalness: 0.1,
+  });
+
+  const yellowMat = new THREE.MeshStandardMaterial({
+    color: 0x451a03,
+    emissive: 0x000000,
+    emissiveIntensity: 0.05,
+    roughness: 0.25,
+    metalness: 0.1,
+  });
+
+  const greenMat = new THREE.MeshStandardMaterial({
+    color: 0x064e3b,
+    emissive: 0x000000,
+    emissiveIntensity: 0.05,
+    roughness: 0.25,
+    metalness: 0.1,
+  });
+
+  const lensGeo = new THREE.CylinderGeometry(0.2, 0.2, 0.08, 16);
+  lensGeo.rotateX(Math.PI / 2);
+
+  const visorGeo = new THREE.CylinderGeometry(0.23, 0.23, 0.24, 16, 1, true, -Math.PI / 2, Math.PI);
+  visorGeo.rotateX(Math.PI / 2);
+
+  // Red Lens (Top, y = 0.52)
+  const redLens = new THREE.Mesh(lensGeo, redMat);
+  redLens.position.set(0, 0.52, 0.32);
+  headGroup.add(redLens);
+
+  const redVisor = new THREE.Mesh(visorGeo, housingMat);
+  redVisor.position.set(0, 0.52, 0.38);
+  headGroup.add(redVisor);
+
+  // Yellow Lens (Middle, y = 0.0)
+  const yellowLens = new THREE.Mesh(lensGeo, yellowMat);
+  yellowLens.position.set(0, 0, 0.32);
+  headGroup.add(yellowLens);
+
+  const yellowVisor = new THREE.Mesh(visorGeo, housingMat);
+  yellowVisor.position.set(0, 0, 0.38);
+  headGroup.add(yellowVisor);
+
+  // Green Lens (Bottom, y = -0.52)
+  const greenLens = new THREE.Mesh(lensGeo, greenMat);
+  greenLens.position.set(0, -0.52, 0.32);
+  headGroup.add(greenLens);
+
+  const greenVisor = new THREE.Mesh(visorGeo, housingMat);
+  greenVisor.position.set(0, -0.52, 0.38);
+  headGroup.add(greenVisor);
+
+  group.add(headGroup);
+
+  // Secondary lower eye-level signal box on vertical mast (y = 2.4)
+  const lowerBox = new THREE.Group();
+  lowerBox.position.set(0, 2.4, 0);
+
+  const lowerHousing = new THREE.Mesh(
+    new THREE.BoxGeometry(0.44, 0.92, 0.28),
+    housingMat
+  );
+  lowerHousing.position.set(0, 0, 0.16);
+  lowerBox.add(lowerHousing);
+
+  const lowerRed = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.12, 0.12, 0.06, 12),
+    redMat
+  );
+  lowerRed.rotation.x = Math.PI / 2;
+  lowerRed.position.set(0, 0.22, 0.31);
+  lowerBox.add(lowerRed);
+
+  const lowerGreen = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.12, 0.12, 0.06, 12),
+    greenMat
+  );
+  lowerGreen.rotation.x = Math.PI / 2;
+  lowerGreen.position.set(0, -0.22, 0.31);
+  lowerBox.add(lowerGreen);
+
+  group.add(lowerBox);
+
+  let currentState: 'red' | 'yellow' | 'green' = 'red';
+
+  const setState = (state: 'red' | 'yellow' | 'green') => {
+    currentState = state;
+    if (state === 'red') {
+      redMat.color.setHex(0xef4444);
+      redMat.emissive.setHex(0xff0000);
+      redMat.emissiveIntensity = 2.6;
+
+      yellowMat.color.setHex(0x451a03);
+      yellowMat.emissive.setHex(0x000000);
+      yellowMat.emissiveIntensity = 0.05;
+
+      greenMat.color.setHex(0x064e3b);
+      greenMat.emissive.setHex(0x000000);
+      greenMat.emissiveIntensity = 0.05;
+    } else if (state === 'yellow') {
+      redMat.color.setHex(0x450a0a);
+      redMat.emissive.setHex(0x000000);
+      redMat.emissiveIntensity = 0.05;
+
+      yellowMat.color.setHex(0xfbbf24);
+      yellowMat.emissive.setHex(0xffaa00);
+      yellowMat.emissiveIntensity = 2.6;
+
+      greenMat.color.setHex(0x064e3b);
+      greenMat.emissive.setHex(0x000000);
+      greenMat.emissiveIntensity = 0.05;
+    } else {
+      redMat.color.setHex(0x450a0a);
+      redMat.emissive.setHex(0x000000);
+      redMat.emissiveIntensity = 0.05;
+
+      yellowMat.color.setHex(0x451a03);
+      yellowMat.emissive.setHex(0x000000);
+      yellowMat.emissiveIntensity = 0.05;
+
+      greenMat.color.setHex(0x10b981);
+      greenMat.emissive.setHex(0x00ff88);
+      greenMat.emissiveIntensity = 2.6;
+    }
+  };
+
+  setState('red');
+
+  return {
+    group,
+    setState,
+    getState: () => currentState,
+  };
+}

@@ -24,9 +24,11 @@ import {
   createPlayerCharacter,
   createSekolahNusantara,
   createTamanKota,
+  createTrafficLightMesh,
   createTuguSurabayaLandmark,
   createVehicleMesh,
   createWarungTenda,
+  TrafficLightRef,
 } from './models';
 import {
   createPavingTrotoarTexture,
@@ -63,6 +65,18 @@ export interface ActiveVehicleInstance {
   maxSpeed: number;
   acceleration: number;
   turnSpeed: number;
+  stuckTimer?: number;
+}
+
+export interface IntersectionTrafficLightSystem {
+  id: string;
+  center: { x: number; z: number };
+  nsLights: TrafficLightRef[];
+  ewLights: TrafficLightRef[];
+  timer: number;
+  cycleDuration: number;
+  nsState: 'red' | 'yellow' | 'green';
+  ewState: 'red' | 'yellow' | 'green';
 }
 
 export interface ActivePedestrian {
@@ -95,9 +109,12 @@ export class CityEngine {
 
   // Lighting & Sky/Weather references
   private keyLight!: THREE.DirectionalLight;
+  private keyLightTargetObj: THREE.Object3D = new THREE.Object3D();
   private hemiLight!: THREE.HemisphereLight;
   private rimLight!: THREE.DirectionalLight;
   private streetLampBulbs: THREE.MeshStandardMaterial[] = [];
+  private streetLampBulbMat!: THREE.MeshStandardMaterial;
+  private trafficLightSystems: IntersectionTrafficLightSystem[] = [];
   private roadMaterials: THREE.MeshStandardMaterial[] = [];
 
   private sunGroup!: THREE.Group;
@@ -195,8 +212,12 @@ export class CityEngine {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.1;
+    const isMobileDevice =
+      /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
+        navigator.userAgent
+      ) || window.innerWidth < 800;
     this.renderer.setPixelRatio(
-      this.isSoftwareGl ? 1 : Math.min(window.devicePixelRatio, 2)
+      this.isSoftwareGl ? 1 : Math.min(window.devicePixelRatio, isMobileDevice ? 1.15 : 1.35)
     );
     this.renderer.shadowMap.enabled = !this.isSoftwareGl;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -230,9 +251,10 @@ export class CityEngine {
     ).texture;
     pmremGenerator.dispose();
 
-    // 5. Build Lighting, Expanded Indonesian City Grid, Sky/Weather, Vehicles, Pedestrians, and Player
+    // 5. Build Lighting, Expanded City Grid, Traffic Lights, Sky/Weather, and Actors
     this.setupLighting();
     this.buildIndonesianCity();
+    this.buildTrafficLights();
     this.setupSkyAndWeather();
     this.spawnPlayer();
     this.spawnVehicles();
@@ -253,17 +275,20 @@ export class CityEngine {
     this.keyLight = new THREE.DirectionalLight(0xfffbeb, 2.2);
     this.keyLight.position.set(85, 125, 75);
     this.keyLight.castShadow = !this.isSoftwareGl;
-    this.keyLight.shadow.mapSize.width = 2048;
-    this.keyLight.shadow.mapSize.height = 2048;
-    const d = 145;
+    this.keyLight.shadow.mapSize.width = 1024;
+    this.keyLight.shadow.mapSize.height = 1024;
+    const d = 65;
     this.keyLight.shadow.camera.left = -d;
     this.keyLight.shadow.camera.right = d;
     this.keyLight.shadow.camera.top = d;
     this.keyLight.shadow.camera.bottom = -d;
     this.keyLight.shadow.camera.near = 10;
-    this.keyLight.shadow.camera.far = 320;
-    this.keyLight.shadow.bias = -0.0005;
+    this.keyLight.shadow.camera.far = 240;
+    this.keyLight.shadow.bias = -0.0004;
     this.keyLight.shadow.normalBias = 0.02;
+    this.keyLightTargetObj.position.set(-8.5, 0, 28);
+    this.scene.add(this.keyLightTargetObj);
+    this.keyLight.target = this.keyLightTargetObj;
     this.scene.add(this.keyLight);
 
     this.hemiLight = new THREE.HemisphereLight(0xbae6fd, 0x3f6212, 0.85);
@@ -353,36 +378,53 @@ export class CityEngine {
     addRoadSegment('ew', 0, 127, 168);
     addRoadSegment('ew', 0, -142, -127);
 
-    // 5. Neatly Framed City Block Sidewalks (Trotoar) inside every 46m x 46m block
+    // 5. Neatly Framed City Block Sidewalks (Trotoar) inside every 46m x 46m block (Optimized InstancedMesh)
+    const blockSpan = 46; // 60 - 14 = 46m between road edges
+    const swHInstanced = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(blockSpan, 0.14, 2.2),
+      trotoarMat,
+      32
+    );
+    const swVInstanced = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(2.2, 0.14, blockSpan - 4.4),
+      trotoarMat,
+      32
+    );
+    swHInstanced.receiveShadow = true;
+    swVInstanced.receiveShadow = true;
+
+    let hIdx = 0;
+    let vIdx = 0;
     for (let xi = 0; xi < ROAD_GRID_LINES.length - 1; xi++) {
       for (let zi = 0; zi < ROAD_GRID_LINES.length - 1; zi++) {
         const cx = (ROAD_GRID_LINES[xi] + ROAD_GRID_LINES[xi + 1]) / 2; // -90, -30, 30, 90
         const cz = (ROAD_GRID_LINES[zi] + ROAD_GRID_LINES[zi + 1]) / 2;
-        const blockSpan = 46; // 60 - 14 = 46m between road edges
 
         // North & South sidewalk strips of the block
         for (const sz of [-blockSpan / 2 + 1.1, blockSpan / 2 - 1.1]) {
-          const swH = new THREE.Mesh(
-            new THREE.BoxGeometry(blockSpan, 0.14, 2.2),
-            trotoarMat
-          );
-          swH.position.set(cx, 0.07, cz + sz);
-          swH.receiveShadow = true;
-          this.scene.add(swH);
+          _dummyObj.position.set(cx, 0.07, cz + sz);
+          _dummyObj.rotation.set(0, 0, 0);
+          _dummyObj.scale.set(1, 1, 1);
+          _dummyObj.updateMatrix();
+          swHInstanced.setMatrixAt(hIdx++, _dummyObj.matrix);
         }
 
         // West & East sidewalk strips of the block
         for (const sx of [-blockSpan / 2 + 1.1, blockSpan / 2 - 1.1]) {
-          const swV = new THREE.Mesh(
-            new THREE.BoxGeometry(2.2, 0.14, blockSpan - 4.4),
-            trotoarMat
-          );
-          swV.position.set(cx + sx, 0.07, cz);
-          swV.receiveShadow = true;
-          this.scene.add(swV);
+          _dummyObj.position.set(cx + sx, 0.07, cz);
+          _dummyObj.rotation.set(0, 0, 0);
+          _dummyObj.scale.set(1, 1, 1);
+          _dummyObj.updateMatrix();
+          swVInstanced.setMatrixAt(vIdx++, _dummyObj.matrix);
         }
       }
     }
+    swHInstanced.instanceMatrix.needsUpdate = true;
+    swVInstanced.instanceMatrix.needsUpdate = true;
+    swHInstanced.computeBoundingSphere();
+    swVInstanced.computeBoundingSphere();
+    this.scene.add(swHInstanced);
+    this.scene.add(swVInstanced);
   }
 
   private buildDedicatedLandmarkPark(
@@ -429,7 +471,7 @@ export class CityEngine {
     walkwayEW.receiveShadow = true;
     this.scene.add(walkwayEW);
 
-    // Ornamental Red-and-Gold Perimeter Park Bollards along the lawn edges
+    // Ornamental Red-and-Gold Perimeter Park Bollards along the lawn edges (InstancedMesh)
     const bollardBodyMat = new THREE.MeshStandardMaterial({
       color: 0x991b1b,
       roughness: 0.5,
@@ -440,6 +482,18 @@ export class CityEngine {
       roughness: 0.3,
       metalness: 0.7,
     });
+    const postInst = new THREE.InstancedMesh(
+      new THREE.CylinderGeometry(0.18, 0.22, 0.75, 8),
+      bollardBodyMat,
+      16
+    );
+    const capInst = new THREE.InstancedMesh(
+      new THREE.SphereGeometry(0.22, 8, 8),
+      bollardCapMat,
+      16
+    );
+
+    let bIdx = 0;
     const bollardOffsets = [-17, -11, 11, 17];
     for (const off of bollardOffsets) {
       for (const [bx, bz] of [
@@ -448,21 +502,24 @@ export class CityEngine {
         [cx - 20.2, cz + off],
         [cx + 20.2, cz + off],
       ]) {
-        const post = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.18, 0.22, 0.75, 8),
-          bollardBodyMat
-        );
-        post.position.set(bx, 0.42, bz);
-        this.scene.add(post);
+        _dummyObj.position.set(bx, 0.42, bz);
+        _dummyObj.rotation.set(0, 0, 0);
+        _dummyObj.scale.set(1, 1, 1);
+        _dummyObj.updateMatrix();
+        postInst.setMatrixAt(bIdx, _dummyObj.matrix);
 
-        const cap = new THREE.Mesh(
-          new THREE.SphereGeometry(0.22, 8, 8),
-          bollardCapMat
-        );
-        cap.position.set(bx, 0.85, bz);
-        this.scene.add(cap);
+        _dummyObj.position.set(bx, 0.85, bz);
+        _dummyObj.updateMatrix();
+        capInst.setMatrixAt(bIdx, _dummyObj.matrix);
+        bIdx++;
       }
     }
+    postInst.instanceMatrix.needsUpdate = true;
+    capInst.instanceMatrix.needsUpdate = true;
+    postInst.computeBoundingSphere();
+    capInst.computeBoundingSphere();
+    this.scene.add(postInst);
+    this.scene.add(capInst);
   }
 
   private buildIndonesianCity() {
@@ -713,12 +770,23 @@ export class CityEngine {
       });
     });
 
-    // 8. Streetlamps & Merah-Putih Pennants Neatly Placed Along Sidewalk Curbs
+    // 8. Streetlamps & Merah-Putih Pennants Along Sidewalk Curbs (Optimized InstancedMesh)
     const poleMat = new THREE.MeshStandardMaterial({
       color: 0x475569,
       metalness: 0.8,
       roughness: 0.3,
     });
+    this.streetLampBulbMat = new THREE.MeshStandardMaterial({
+      color: 0xfef08a,
+      emissive: 0xfacc15,
+      emissiveIntensity: 0.6,
+    });
+    this.streetLampBulbs = [this.streetLampBulbMat];
+
+    const redFlagMat = new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.6 });
+    const whiteFlagMat = new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.6 });
+
+    const lampPositions: [number, number][] = [];
     const lampOffsetsAlongBlock = [-96, -84, -36, -24, 24, 36, 84, 96];
     for (const dist of lampOffsetsAlongBlock) {
       for (const [lx, lz] of [
@@ -730,49 +798,161 @@ export class CityEngine {
         [-51.6, dist],
       ]) {
         if (Math.hypot(lx - 60, lz) < 20) continue; // Keep clear of Tugu Surabaya roundabout
-        const lampGroup = new THREE.Group();
-        const post = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.1, 0.14, 5.4, 8),
-          poleMat
-        );
-        post.position.y = 2.7;
-        lampGroup.add(post);
-
-        const bulbMat = new THREE.MeshStandardMaterial({
-          color: 0xfef08a,
-          emissive: 0xfacc15,
-          emissiveIntensity: 0.6,
-        });
-        this.streetLampBulbs.push(bulbMat);
-
-        const lantern = new THREE.Mesh(
-          new THREE.BoxGeometry(0.7, 0.22, 0.36),
-          bulbMat
-        );
-        lantern.position.set(0, 5.4, 0);
-        lampGroup.add(lantern);
-
-        const redFlag = new THREE.Mesh(
-          new THREE.BoxGeometry(0.05, 0.45, 0.85),
-          new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.6 })
-        );
-        redFlag.position.set(0, 4.1, 0.45);
-        lampGroup.add(redFlag);
-
-        const whiteFlag = new THREE.Mesh(
-          new THREE.BoxGeometry(0.05, 0.45, 0.85),
-          new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.6 })
-        );
-        whiteFlag.position.set(0, 3.65, 0.45);
-        lampGroup.add(whiteFlag);
-
-        lampGroup.position.set(lx, 0, lz);
-        this.scene.add(lampGroup);
+        lampPositions.push([lx, lz]);
       }
     }
 
+    const lampCount = lampPositions.length;
+    const postInst = new THREE.InstancedMesh(
+      new THREE.CylinderGeometry(0.1, 0.14, 5.4, 8),
+      poleMat,
+      lampCount
+    );
+    const lanternInst = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(0.7, 0.22, 0.36),
+      this.streetLampBulbMat,
+      lampCount
+    );
+    const redFlagInst = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(0.05, 0.45, 0.85),
+      redFlagMat,
+      lampCount
+    );
+    const whiteFlagInst = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(0.05, 0.45, 0.85),
+      whiteFlagMat,
+      lampCount
+    );
+
+    lampPositions.forEach(([lx, lz], i) => {
+      _dummyObj.position.set(lx, 2.7, lz);
+      _dummyObj.rotation.set(0, 0, 0);
+      _dummyObj.scale.set(1, 1, 1);
+      _dummyObj.updateMatrix();
+      postInst.setMatrixAt(i, _dummyObj.matrix);
+
+      _dummyObj.position.set(lx, 5.4, lz);
+      _dummyObj.updateMatrix();
+      lanternInst.setMatrixAt(i, _dummyObj.matrix);
+
+      _dummyObj.position.set(lx, 4.1, lz + 0.45);
+      _dummyObj.updateMatrix();
+      redFlagInst.setMatrixAt(i, _dummyObj.matrix);
+
+      _dummyObj.position.set(lx, 3.65, lz + 0.45);
+      _dummyObj.updateMatrix();
+      whiteFlagInst.setMatrixAt(i, _dummyObj.matrix);
+    });
+
+    postInst.instanceMatrix.needsUpdate = true;
+    lanternInst.instanceMatrix.needsUpdate = true;
+    redFlagInst.instanceMatrix.needsUpdate = true;
+    whiteFlagInst.instanceMatrix.needsUpdate = true;
+
+    postInst.computeBoundingSphere();
+    lanternInst.computeBoundingSphere();
+    redFlagInst.computeBoundingSphere();
+    whiteFlagInst.computeBoundingSphere();
+
+    this.scene.add(postInst);
+    this.scene.add(lanternInst);
+    this.scene.add(redFlagInst);
+    this.scene.add(whiteFlagInst);
+
     // 9. Neatly Organized Boulevard & Park Tropical Trees (100% Clear of Roads & Buildings)
     this.buildInstancedTropicalTrees();
+  }
+
+  private buildTrafficLights() {
+    const intersections = [
+      { id: 'center', x: 0, z: 0, offsetTimer: 0 },
+      { id: 'west', x: -60, z: 0, offsetTimer: 5.5 },
+      { id: 'east', x: 60, z: 0, offsetTimer: 5.5 },
+      { id: 'south', x: 0, z: 60, offsetTimer: 11.0 },
+      { id: 'north', x: 0, z: -60, offsetTimer: 11.0 },
+    ];
+
+    intersections.forEach((inter) => {
+      const cx = inter.x;
+      const cz = inter.z;
+      const offset = 7.8;
+
+      // South-West corner: arm points East across Northbound lane, facing South toward approaching Northbound traffic
+      const swLight = createTrafficLightMesh();
+      swLight.group.position.set(cx - offset, 0, cz + offset);
+      swLight.group.rotation.y = 0;
+      this.scene.add(swLight.group);
+
+      // North-East corner: arm points West across Southbound lane, facing North toward approaching Southbound traffic
+      const neLight = createTrafficLightMesh();
+      neLight.group.position.set(cx + offset, 0, cz - offset);
+      neLight.group.rotation.y = Math.PI;
+      this.scene.add(neLight.group);
+
+      // South-East corner: arm points North across Westbound lane, facing East toward approaching Westbound traffic
+      const seLight = createTrafficLightMesh();
+      seLight.group.position.set(cx + offset, 0, cz + offset);
+      seLight.group.rotation.y = Math.PI / 2;
+      this.scene.add(seLight.group);
+
+      // North-West corner: arm points South across Eastbound lane, facing West toward approaching Eastbound traffic
+      const nwLight = createTrafficLightMesh();
+      nwLight.group.position.set(cx - offset, 0, cz - offset);
+      nwLight.group.rotation.y = -Math.PI / 2;
+      this.scene.add(nwLight.group);
+
+      this.trafficLightSystems.push({
+        id: inter.id,
+        center: { x: cx, z: cz },
+        nsLights: [swLight, neLight],
+        ewLights: [seLight, nwLight],
+        timer: inter.offsetTimer,
+        cycleDuration: 26.0,
+        nsState: 'green',
+        ewState: 'red',
+      });
+    });
+  }
+
+  private updateTrafficLights(dt: number) {
+    for (const inter of this.trafficLightSystems) {
+      inter.timer = (inter.timer + dt) % inter.cycleDuration;
+      let nsState: 'red' | 'yellow' | 'green';
+      let ewState: 'red' | 'yellow' | 'green';
+
+      if (inter.timer < 9.5) {
+        nsState = 'green';
+        ewState = 'red';
+      } else if (inter.timer < 12.0) {
+        nsState = 'yellow';
+        ewState = 'red';
+      } else if (inter.timer < 13.0) {
+        nsState = 'red';
+        ewState = 'red';
+      } else if (inter.timer < 22.5) {
+        nsState = 'red';
+        ewState = 'green';
+      } else if (inter.timer < 25.0) {
+        nsState = 'red';
+        ewState = 'yellow';
+      } else {
+        nsState = 'red';
+        ewState = 'red';
+      }
+
+      if (inter.nsState !== nsState) {
+        inter.nsState = nsState;
+        for (const l of inter.nsLights) {
+          l.setState(nsState);
+        }
+      }
+      if (inter.ewState !== ewState) {
+        inter.ewState = ewState;
+        for (const l of inter.ewLights) {
+          l.setState(ewState);
+        }
+      }
+    }
   }
 
   private isPositionClearForTree(x: number, z: number): boolean {
@@ -2208,6 +2388,10 @@ export class CityEngine {
 
   private updateCelestialOrbit() {
     const h = ((this.clockHour % 24) + 24) % 24;
+    const activePos = this.drivenVehicle
+      ? this.drivenVehicle.mesh.position
+      : this.playerPos;
+
     if (h >= 5.5 && h < 18.5) {
       // Sun arcs smoothly from East (+145) at 05:30 to High Noon (0) at 12:00 to West (-145) at 18:30
       const dayT = (h - 5.5) / 13.0; // 0..1
@@ -2217,9 +2401,9 @@ export class CityEngine {
       const sunZ = -148;
       this.sunGroup.position.set(sunX, sunY, sunZ);
       this.keyLight.position.set(
-        Math.cos(angle) * 110,
-        Math.max(35, Math.sin(angle) * 125),
-        65
+        activePos.x + Math.cos(angle) * 75,
+        Math.max(35, Math.sin(angle) * 85),
+        activePos.z + 55
       );
     } else {
       // Moon arcs across the nocturnal sky from 18:30 to 05:30
@@ -2229,7 +2413,11 @@ export class CityEngine {
       const moonX = Math.cos(angle) * 135;
       const moonY = Math.max(24, Math.sin(angle) * 86);
       this.moonGroup.position.set(moonX, moonY, -145);
-      this.keyLight.position.set(moonX * 0.6, Math.max(55, moonY), -45);
+      this.keyLight.position.set(
+        activePos.x + moonX * 0.5,
+        Math.max(45, moonY),
+        activePos.z - 45
+      );
     }
   }
 
@@ -2581,34 +2769,74 @@ export class CityEngine {
 
       if (!v.isAI || v.waypoints.length === 0) continue;
 
-      const targetWP = v.waypoints[v.waypointIdx];
-      const dx = targetWP.x - v.mesh.position.x;
-      const dz = targetWP.z - v.mesh.position.z;
+      const prevWP = v.waypoints[(v.waypointIdx - 1 + v.waypoints.length) % v.waypoints.length];
+      const currWP = v.waypoints[v.waypointIdx];
+      const nextWP = v.waypoints[(v.waypointIdx + 1) % v.waypoints.length];
+
+      const dx = currWP.x - v.mesh.position.x;
+      const dz = currWP.z - v.mesh.position.z;
       const distToWP = Math.hypot(dx, dz);
 
-      if (distToWP < 2.2) {
+      // Check segment orientation
+      const isNS = Math.abs(prevWP.x - currWP.x) < 1.0;
+      const isEW = Math.abs(prevWP.z - currWP.z) < 1.0;
+      const currentSegHeading = Math.atan2(currWP.x - prevWP.x, currWP.z - prevWP.z);
+      const nextSegHeading = Math.atan2(nextWP.x - currWP.x, nextWP.z - currWP.z);
+
+      let cornerAngle = nextSegHeading - currentSegHeading;
+      while (cornerAngle > Math.PI) cornerAngle -= Math.PI * 2;
+      while (cornerAngle < -Math.PI) cornerAngle += Math.PI * 2;
+      const isApproachingCorner = Math.abs(cornerAngle) > 0.35;
+
+      // Waypoint Arrival: Advance to next segment when vehicle reaches intersection center
+      if (distToWP < 2.5) {
         v.waypointIdx = (v.waypointIdx + 1) % v.waypoints.length;
       }
 
-      const nextWP = v.waypoints[v.waypointIdx];
-      const desiredHeading = Math.atan2(
-        nextWP.x - v.mesh.position.x,
-        nextWP.z - v.mesh.position.z
-      );
+      // Smooth heading target: follow segment towards target WP, or blend into corner turn when near
+      let desiredHeading = Math.atan2(currWP.x - v.mesh.position.x, currWP.z - v.mesh.position.z);
+      if (isApproachingCorner && distToWP <= 3.2) {
+        const turnBlend = 1.0 - distToWP / 3.2;
+        desiredHeading = currentSegHeading + cornerAngle * turnBlend;
+      }
 
       let angleDiff = desiredHeading - v.heading;
       while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
       while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
 
-      v.heading += Math.sign(angleDiff) * Math.min(Math.abs(angleDiff), 4.6 * dt);
+      const isSharpTurn = Math.abs(angleDiff) > 0.35;
+      const turnRate = isSharpTurn ? 9.2 : 5.2;
+      v.heading += Math.sign(angleDiff) * Math.min(Math.abs(angleDiff), turnRate * dt);
 
-      // Smart Lane Spacing: Check if another vehicle or the player is directly ahead in the same lane
+      // Smart Lane Spacing & Traffic Light Compliance
       const forwardX = Math.sin(v.heading);
       const forwardZ = Math.cos(v.heading);
       let shouldYield = false;
+      let stoppedByRedLight = false;
 
-      // Yield for player on foot if directly in front on a crosswalk
-      if (!this.drivenVehicle) {
+      // Yield for Red/Yellow Traffic Light at approaching intersections
+      for (const inter of this.trafficLightSystems) {
+        const idx = inter.center.x - v.mesh.position.x;
+        const idz = inter.center.z - v.mesh.position.z;
+        const distToCenter = Math.hypot(idx, idz);
+
+        // Approaching intersection zone (between stop line ~7.5m and detection distance 26m)
+        if (distToCenter > 7.5 && distToCenter < 26.0) {
+          const approachDot = (idx * forwardX + idz * forwardZ) / distToCenter;
+          if (approachDot > 0.72) {
+            const isNorthSouth = Math.abs(forwardZ) >= Math.abs(forwardX);
+            const activeLightState = isNorthSouth ? inter.nsState : inter.ewState;
+            if (activeLightState === 'red' || activeLightState === 'yellow') {
+              shouldYield = true;
+              stoppedByRedLight = true;
+              break;
+            }
+          }
+        }
+      }
+
+      // Yield for player on foot if directly in front on road / crosswalk
+      if (!shouldYield && !this.drivenVehicle) {
         const pdx = this.playerPos.x - v.mesh.position.x;
         const pdz = this.playerPos.z - v.mesh.position.z;
         const pDist = Math.hypot(pdx, pdz);
@@ -2618,14 +2846,14 @@ export class CityEngine {
         }
       }
 
-      // Yield for any vehicle directly ahead in the same lane (< 9.2m)
+      // Yield for any vehicle directly ahead in the same lane (< 9.0m)
       if (!shouldYield) {
         for (const other of this.vehicles) {
           if (other === v) continue;
           const odx = other.mesh.position.x - v.mesh.position.x;
           const odz = other.mesh.position.z - v.mesh.position.z;
           const oDist = Math.hypot(odx, odz);
-          if (oDist < 9.2 && oDist > 0.1) {
+          if (oDist < 9.0 && oDist > 0.1) {
             const dot = (odx * forwardX + odz * forwardZ) / oDist;
             if (dot > 0.82) {
               shouldYield = true;
@@ -2635,22 +2863,97 @@ export class CityEngine {
         }
       }
 
+      // Anti-stuck watchdog: Ensure vehicles keep moving continuously and never freeze indefinitely
+      if (!stoppedByRedLight && v.speed < 0.6) {
+        v.stuckTimer = (v.stuckTimer || 0) + dt;
+        if (v.stuckTimer > 3.0) {
+          v.speed = Math.max(v.speed, 6.0);
+          v.waypointIdx = (v.waypointIdx + 1) % v.waypoints.length;
+          v.stuckTimer = 0;
+          shouldYield = false;
+        }
+      } else {
+        v.stuckTimer = 0;
+      }
+
       const baseCruise =
         v.type === 'polisi' && this.wantedStars > 0
           ? 18.5
           : v.type === 'ojol_motor'
-          ? 15.5
+          ? 15.0
           : v.type === 'polisi'
-          ? 14.5
+          ? 14.0
           : v.type === 'angkot'
-          ? 13.0
-          : 11.8;
+          ? 12.5
+          : 11.2;
 
-      const targetSpeed = shouldYield ? 0 : baseCruise;
-      v.speed = THREE.MathUtils.damp(v.speed, targetSpeed, shouldYield ? 8.5 : 3.5, dt);
+      // Pre-turn Braking: decelerate smoothly when approaching intersection turns to prevent overshooting
+      let targetSpeed: number;
+      if (shouldYield) {
+        targetSpeed = 0;
+      } else if (isApproachingCorner && distToWP < 12.0) {
+        const cornerSpeed = v.type === 'ojol_motor' ? 5.8 : 4.8;
+        const approachRatio = Math.max(0, distToWP / 12.0);
+        targetSpeed = THREE.MathUtils.lerp(cornerSpeed, baseCruise, approachRatio);
+      } else if (isSharpTurn) {
+        targetSpeed = baseCruise * 0.52;
+      } else {
+        targetSpeed = baseCruise;
+      }
 
-      const nx = v.mesh.position.x + Math.sin(v.heading) * v.speed * dt;
-      const nz = v.mesh.position.z + Math.cos(v.heading) * v.speed * dt;
+      v.speed = THREE.MathUtils.damp(
+        v.speed,
+        targetSpeed,
+        shouldYield ? 8.5 : 3.5,
+        dt
+      );
+
+      // Advance vehicle position
+      let nx = v.mesh.position.x + Math.sin(v.heading) * v.speed * dt;
+      let nz = v.mesh.position.z + Math.cos(v.heading) * v.speed * dt;
+
+      // Active Lane-Centering (Cross-Track Error Correction) along straight road corridors
+      if (distToWP > 4.0) {
+        if (isNS) {
+          nx = THREE.MathUtils.damp(nx, currWP.x, 7.5, dt);
+        } else if (isEW) {
+          nz = THREE.MathUtils.damp(nz, currWP.z, 7.5, dt);
+        }
+      }
+
+      // Airtight Road Corridor Boundary Safety Net (Ensures vehicle never veers into sidewalk/blocks)
+      let minDiffX = 999;
+      let nearestGX = 0;
+      for (const gx of ROAD_GRID_LINES) {
+        const diff = Math.abs(nx - gx);
+        if (diff < minDiffX) {
+          minDiffX = diff;
+          nearestGX = gx;
+        }
+      }
+
+      let minDiffZ = 999;
+      let nearestGZ = 0;
+      for (const gz of ROAD_GRID_LINES) {
+        const diff = Math.abs(nz - gz);
+        if (diff < minDiffZ) {
+          minDiffZ = diff;
+          nearestGZ = gz;
+        }
+      }
+
+      // Asphalt roadway width is 14m (center ±7.0m). Safe vehicle envelope is ±5.6m.
+      const SAFE_ROAD_HALF_WIDTH = 5.6;
+      if (minDiffX > SAFE_ROAD_HALF_WIDTH && minDiffZ > SAFE_ROAD_HALF_WIDTH) {
+        if (minDiffX <= minDiffZ) {
+          const sign = Math.sign(nx - nearestGX) || 1;
+          nx = nearestGX + sign * SAFE_ROAD_HALF_WIDTH;
+        } else {
+          const sign = Math.sign(nz - nearestGZ) || 1;
+          nz = nearestGZ + sign * SAFE_ROAD_HALF_WIDTH;
+        }
+      }
+
       v.mesh.position.set(nx, 0, nz);
       v.mesh.rotation.y = v.heading;
       v.mesh.rotation.z = THREE.MathUtils.damp(
@@ -2660,12 +2963,15 @@ export class CityEngine {
         dt
       );
 
-      // Spin AI vehicle wheels
-      const wheels = v.mesh.userData.wheels as THREE.Object3D[] | undefined;
-      if (wheels && v.speed > 0.2) {
-        wheels.forEach((w) => {
-          w.rotation.x += v.speed * dt * 1.6;
-        });
+      // Distance culling for AI vehicle details (skip wheels if far from camera)
+      const distToCamSq = (v.mesh.position.x - activePos.x) ** 2 + (v.mesh.position.z - activePos.z) ** 2;
+      if (distToCamSq < 130 * 130) {
+        const wheels = v.mesh.userData.wheels as THREE.Object3D[] | undefined;
+        if (wheels && v.speed > 0.2) {
+          wheels.forEach((w) => {
+            w.rotation.x += v.speed * dt * 1.6;
+          });
+        }
       }
 
       if (this.drivenVehicle) {
@@ -2689,45 +2995,107 @@ export class CityEngine {
       }
     }
 
-    // 2. Update Sidewalk & Park Pedestrians along their loops
-    for (const p of this.pedestrians) {
+    // 2. Update Sidewalk & Park Pedestrians along their loops with obstacle avoidance & distance culling
+    for (let i = 0; i < this.pedestrians.length; i++) {
+      const p = this.pedestrians[i];
+      const distSq = (p.mesh.position.x - activePos.x) ** 2 + (p.mesh.position.z - activePos.z) ** 2;
+      const isVisible = distSq < 85 * 85;
+      p.mesh.visible = isVisible;
+
       const wp = p.waypoints[p.waypointIdx];
       const dx = wp.x - p.mesh.position.x;
       const dz = wp.z - p.mesh.position.z;
-      if (Math.hypot(dx, dz) < 0.8) {
+      if (Math.hypot(dx, dz) < 1.0) {
         p.waypointIdx = (p.waypointIdx + 1) % p.waypoints.length;
       }
 
-      // Pause politely if player on foot stands right in front of the NPC
-      const distToPlayer = Math.hypot(
-        activePos.x - p.mesh.position.x,
-        activePos.z - p.mesh.position.z
-      );
-      if (!this.drivenVehicle && distToPlayer < 1.9) {
-        p.mesh.rotation.y = Math.atan2(
-          activePos.x - p.mesh.position.x,
-          activePos.z - p.mesh.position.z
+      // If outside visible range, coarse positional step only, skip all limb rotations
+      if (!isVisible) {
+        const nextWP = p.waypoints[p.waypointIdx];
+        p.heading = Math.atan2(
+          nextWP.x - p.mesh.position.x,
+          nextWP.z - p.mesh.position.z
         );
-        const limbs = p.mesh.userData.limbs;
-        if (limbs) {
-          limbs.leftLeg.rotation.x = 0;
-          limbs.rightLeg.rotation.x = 0;
-          limbs.leftArm.rotation.x = 0;
-          limbs.rightArm.rotation.x = 0;
-        }
+        p.mesh.position.x += Math.sin(p.heading) * p.speed * dt;
+        p.mesh.position.z += Math.cos(p.heading) * p.speed * dt;
         continue;
       }
 
+      // Active Sidewalk Obstacle Avoidance: Do not halt; fluidly sidestep around people in front
+      const fwdX = Math.sin(p.heading);
+      const fwdZ = Math.cos(p.heading);
+      const rightX = Math.cos(p.heading);
+      const rightZ = -Math.sin(p.heading);
+
+      let avoidDir = 0;
+      let maxAvoidWeight = 0;
+
+      // 1) Avoid player walking on foot
+      if (!this.drivenVehicle) {
+        const pdx = activePos.x - p.mesh.position.x;
+        const pdz = activePos.z - p.mesh.position.z;
+        const pDist = Math.hypot(pdx, pdz);
+        if (pDist < 3.2 && pDist > 0.05) {
+          const pFwd = pdx * fwdX + pdz * fwdZ;
+          const pRight = pdx * rightX + pdz * rightZ;
+          if (pFwd > 0.15 && pFwd < 2.9 && Math.abs(pRight) < 1.45) {
+            const weight = 1.0 - pFwd / 2.9;
+            const dir = pRight >= 0 ? -1 : 1;
+            avoidDir += dir * weight;
+            maxAvoidWeight = Math.max(maxAvoidWeight, weight);
+          }
+        }
+      }
+
+      // 2) Avoid nearby pedestrians in path to pass smoothly without stopping
+      for (let j = 0; j < this.pedestrians.length; j++) {
+        if (i === j) continue;
+        const other = this.pedestrians[j];
+        const odx = other.mesh.position.x - p.mesh.position.x;
+        const odz = other.mesh.position.z - p.mesh.position.z;
+        const oDistSq = odx * odx + odz * odz;
+        if (oDistSq < 2.8 * 2.8 && oDistSq > 0.04) {
+          const oFwd = odx * fwdX + odz * fwdZ;
+          const oRight = odx * rightX + odz * rightZ;
+          if (oFwd > 0.15 && oFwd < 2.5 && Math.abs(oRight) < 1.3) {
+            const weight = 1.0 - oFwd / 2.5;
+            const dir = oRight >= 0 ? -1 : 1;
+            avoidDir += dir * weight;
+            maxAvoidWeight = Math.max(maxAvoidWeight, weight);
+          }
+        }
+      }
+
       const nextWP = p.waypoints[p.waypointIdx];
-      p.heading = Math.atan2(
+      const baseHeading = Math.atan2(
         nextWP.x - p.mesh.position.x,
         nextWP.z - p.mesh.position.z
       );
 
+      // Deflect heading smoothly to sidestep around the obstacle
+      const steerDeflection = THREE.MathUtils.clamp(avoidDir, -1.0, 1.0) * 0.68;
+      const desiredHeading = baseHeading + steerDeflection;
+
+      let headingDiff = desiredHeading - p.heading;
+      while (headingDiff > Math.PI) headingDiff -= Math.PI * 2;
+      while (headingDiff < -Math.PI) headingDiff += Math.PI * 2;
+
+      p.heading += Math.sign(headingDiff) * Math.min(Math.abs(headingDiff), 7.5 * dt);
+
+      // Continuously walk forward (never freeze or stop!)
       p.mesh.position.x += Math.sin(p.heading) * p.speed * dt;
       p.mesh.position.z += Math.cos(p.heading) * p.speed * dt;
+
+      // Apply subtle lateral sidestep glide for immediate fluid passing
+      if (maxAvoidWeight > 0.2) {
+        const sideGlide = Math.sign(avoidDir || -1) * p.speed * 0.42 * maxAvoidWeight * dt;
+        p.mesh.position.x += rightX * sideGlide;
+        p.mesh.position.z += rightZ * sideGlide;
+      }
+
       p.mesh.rotation.y = p.heading;
 
+      // Fluid continuous walking limb swing animation
       p.walkCycle += dt * (p.speed * 3.1);
       const limbs = p.mesh.userData.limbs;
       if (limbs) {
@@ -3023,6 +3391,13 @@ export class CityEngine {
       this.updatePlayerOnFoot(dt);
     }
 
+    const activePos = this.drivenVehicle
+      ? this.drivenVehicle.mesh.position
+      : this.playerPos;
+
+    this.keyLightTargetObj.position.set(activePos.x, 0, activePos.z);
+
+    this.updateTrafficLights(dt);
     this.updateAITrafficAndPedestrians(dt, elapsed);
     this.updateMissionLogic(dt, elapsed);
     this.updateSkyAndWeather(dt);

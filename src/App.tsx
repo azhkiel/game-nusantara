@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ControlOverlay } from './components/ControlOverlay';
 import { CityEngine } from './three/CityEngine';
 import {
@@ -74,88 +74,89 @@ export default function App() {
     };
   }, []);
 
-  const handleToggleEnterExit = () => {
+  const handleToggleEnterExit = useCallback(() => {
     engineRef.current?.toggleVehicleEnterExit();
-  };
+  }, []);
 
-  const handleSpawnVehicle = (type: VehicleType) => {
+  const handleSpawnVehicle = useCallback((type: VehicleType) => {
     engineRef.current?.spawnAndEnterVehicle(type);
-  };
+  }, []);
 
-  const handleHonkHorn = () => {
+  const handleHonkHorn = useCallback(() => {
     engineRef.current?.honkVehicleHorn();
-  };
+  }, []);
 
-  const handleContextAction = () => {
+  const handleContextAction = useCallback(() => {
     engineRef.current?.triggerContextAction();
-  };
+  }, []);
 
-  const handleHomeAction = (
-    action: 'sleep' | 'eat' | 'sit' | 'stand' | 'exit' | 'enter'
-  ) => {
-    engineRef.current?.performHomeAction(action);
-  };
+  const handleHomeAction = useCallback(
+    (action: 'sleep' | 'eat' | 'sit' | 'stand' | 'exit' | 'enter') => {
+      engineRef.current?.performHomeAction(action);
+    },
+    []
+  );
 
-  const handleBuyShopItem = (spotId: string, itemId: string) => {
+  const handleBuyShopItem = useCallback((spotId: string, itemId: string) => {
     engineRef.current?.buyShopItem(spotId, itemId);
-  };
+  }, []);
 
-  const handleStartMission = (id: string) => {
+  const handleStartMission = useCallback((id: string) => {
     engineRef.current?.startMission(id);
-  };
+  }, []);
 
-  const handleCancelMission = () => {
+  const handleCancelMission = useCallback(() => {
     engineRef.current?.cancelMission();
-  };
+  }, []);
 
-  const handleChangeTimeOfDay = (nextTime: TimeOfDay) => {
+  const handleChangeTimeOfDay = useCallback((nextTime: TimeOfDay) => {
     engineRef.current?.setTimeOfDay(nextTime);
-  };
+  }, []);
 
-  const handleToggleAutoTime = (enabled: boolean) => {
+  const handleToggleAutoTime = useCallback((enabled: boolean) => {
     engineRef.current?.setAutoTime(enabled);
-  };
+  }, []);
 
-  const handleChangeWeather = (nextWeather: WeatherType) => {
+  const handleChangeWeather = useCallback((nextWeather: WeatherType) => {
     engineRef.current?.setWeather(nextWeather);
-  };
+  }, []);
 
-  const handleChangeOutfit = (nextOutfit: OutfitStyle) => {
+  const handleChangeOutfit = useCallback((nextOutfit: OutfitStyle) => {
     setOutfit(nextOutfit);
     engineRef.current?.setOutfit(nextOutfit);
-  };
+  }, []);
 
-  const handleChangeCamera = (nextCam: CameraMode) => {
+  const handleChangeCamera = useCallback((nextCam: CameraMode) => {
     setCameraMode(nextCam);
     engineRef.current?.setCameraMode(nextCam);
-  };
+  }, []);
 
-  const handleClearWanted = () => {
+  const handleClearWanted = useCallback(() => {
     engineRef.current?.clearWantedStars();
-  };
+  }, []);
 
-  const handleTeleport = (x: number, z: number, label: string) => {
+  const handleTeleport = useCallback((x: number, z: number, label: string) => {
     engineRef.current?.teleportToLandmark(x, z, label);
-  };
+  }, []);
 
-  const handleToggleMute = () => {
-    const nextMuted = !isMuted;
-    soundFX.setMuted(nextMuted);
-    setIsMuted(nextMuted);
-  };
+  const handleToggleMute = useCallback(() => {
+    setIsMuted((prev) => {
+      const nextMuted = !prev;
+      soundFX.setMuted(nextMuted);
+      return nextMuted;
+    });
+  }, []);
 
-  const handleVirtualControl = (
-    forward: number,
-    turn: number,
-    brake = false,
-    sprint = false
-  ) => {
-    engineRef.current?.setVirtualInput(forward, turn, brake, sprint);
-  };
+  const handleVirtualControl = useCallback(
+    (forward: number, turn: number, brake = false, sprint = false) => {
+      engineRef.current?.setVirtualInput(forward, turn, brake, sprint);
+    },
+    []
+  );
 
-  const handleJump = () => {
+  const handleJump = useCallback(() => {
     engineRef.current?.triggerJump();
-  };
+  }, []);
 
   return (
     <main className="relative h-screen w-screen overflow-hidden bg-slate-950">

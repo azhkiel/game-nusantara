@@ -1974,11 +1974,22 @@ export class CityEngine {
           { x: -116.5, z: 3.5 },
         ],
       },
-      // 7 & 8. Inner Ring Clockwise (Left lane at ±56.5)
+      // 7, 8 & 8B. Inner Ring Clockwise (Left lane at ±56.5) + Inner Ring Police Patrol
       {
         type: 'angkot',
         startIdx: 0,
         spawnProgress: 0.2,
+        waypoints: [
+          { x: -56.5, z: 56.5 },
+          { x: -56.5, z: -56.5 },
+          { x: 56.5, z: -56.5 },
+          { x: 56.5, z: 56.5 },
+        ],
+      },
+      {
+        type: 'polisi',
+        startIdx: 1,
+        spawnProgress: 0.35,
         waypoints: [
           { x: -56.5, z: 56.5 },
           { x: -56.5, z: -56.5 },
@@ -2527,20 +2538,25 @@ export class CityEngine {
     this.keys[e.code] = false;
   };
 
+  private dragPointerId: number | null = null;
+
   private handlePointerDown = (e: PointerEvent) => {
     this.isPointerDragging = true;
+    this.dragPointerId = e.pointerId;
     this.lastPointerX = e.clientX;
   };
 
   private handlePointerMove = (e: PointerEvent) => {
-    if (!this.isPointerDragging) return;
+    if (!this.isPointerDragging || this.dragPointerId !== e.pointerId) return;
     const dx = e.clientX - this.lastPointerX;
     this.lastPointerX = e.clientX;
     this.cameraOrbitOffset -= dx * 0.0065;
   };
 
-  private handlePointerUp = () => {
+  private handlePointerUp = (e: PointerEvent) => {
+    if (this.dragPointerId !== null && e.pointerId !== this.dragPointerId) return;
     this.isPointerDragging = false;
+    this.dragPointerId = null;
   };
 
   private handleResize = () => {
@@ -2566,7 +2582,14 @@ export class CityEngine {
   }
 
   public triggerJump() {
-    if (!this.drivenVehicle && this.playerPos.y <= 0.01) {
+    if (this.drivenVehicle) return;
+    if (this.playerHomeState !== 'standing') {
+      this.performHomeAction('stand');
+      return;
+    }
+    const insideNow = this.isPlayerInsideHome(this.playerPos.x, this.playerPos.z);
+    const floorY = insideNow ? 0.14 : 0;
+    if (this.playerPos.y <= floorY + 0.05) {
       this.playerVelocityY = 6.8;
       soundFX.playInteractChime();
     }
@@ -2619,10 +2642,18 @@ export class CityEngine {
 
       if (wasAI && nearest.type === 'polisi') {
         this.wantedStars = Math.min(5, Math.max(2, this.wantedStars + 2));
-        this.wantedDecayTimer = 30;
+        this.wantedDecayTimer = 35;
         this.showNotification(
-          'Mobil Patroli Dibajak!',
-          'Status Buronan Polisi naik! Pergi ke Bengkel Cat untuk aman.',
+          'Mobil Patroli Dibajak! (★★)',
+          'Unit Patroli Polisi lainnya sedang mengejarmu! Pergi ke Bengkel Cat atau Rumah Pribadi.',
+          'warning'
+        );
+      } else if (wasAI && nearest.waypoints.length > 0) {
+        this.wantedStars = Math.min(5, Math.max(1, this.wantedStars + 1));
+        this.wantedDecayTimer = 35;
+        this.showNotification(
+          `Membajak ${nearest.name}! (★)`,
+          'Mobil Patroli Polisi dikerahkan mengejarmu lintas jalur!',
           'warning'
         );
       } else {
@@ -2822,6 +2853,11 @@ export class CityEngine {
   }
 
   public triggerContextAction() {
+    if (!this.drivenVehicle && this.playerHomeState !== 'standing') {
+      this.performHomeAction('stand');
+      return;
+    }
+
     if (!this.drivenVehicle && this.wasInsideHome) {
       // Check nearest indoor activity spot (Bed, Dining Table, Sofa, or Front Door)
       const dBed = Math.hypot(this.playerPos.x - -20.5, this.playerPos.z - 27.4);
@@ -2829,23 +2865,25 @@ export class CityEngine {
       const dSofa = Math.hypot(this.playerPos.x - -16.4, this.playerPos.z - 25.65);
       const dDoor = Math.hypot(this.playerPos.x - -13.5, this.playerPos.z - 24.0);
       const minD = Math.min(dBed, dEat, dSofa, dDoor);
-      if (minD === dDoor && dDoor < 3.2) {
+      if (minD === dDoor && dDoor < 2.2) {
         this.performHomeAction('exit');
         return;
       }
-      if (minD === dBed && dBed < 3.5) {
+      if (minD === dBed && dBed < 2.3) {
         this.performHomeAction('sleep');
         return;
       }
-      if (minD === dEat && dEat < 3.5) {
+      if (minD === dEat && dEat < 2.2) {
         this.performHomeAction('eat');
         return;
       }
-      if (minD === dSofa && dSofa < 3.5) {
+      if (minD === dSofa && dSofa < 2.2) {
         this.performHomeAction('sit');
         return;
       }
-      this.performHomeAction('exit');
+      // Otherwise perform a regular punch inside the house without kicking player out
+      this.playerPunchTimer = 0.4;
+      soundFX.playImpactThud();
       return;
     }
 
@@ -2868,6 +2906,51 @@ export class CityEngine {
     if (!this.drivenVehicle) {
       this.playerPunchTimer = 0.4;
       soundFX.playImpactThud();
+
+      // Check if player punched a nearby pedestrian or AI vehicle outside -> triggers Wanted Police Chase!
+      let hitTarget = false;
+      for (const p of this.pedestrians) {
+        const d = Math.hypot(
+          p.mesh.position.x - this.playerPos.x,
+          p.mesh.position.z - this.playerPos.z
+        );
+        if (d < 2.6) {
+          hitTarget = true;
+          // Push pedestrian back slightly
+          const pushAngle = Math.atan2(
+            p.mesh.position.x - this.playerPos.x,
+            p.mesh.position.z - this.playerPos.z
+          );
+          p.mesh.position.x += Math.sin(pushAngle) * 1.2;
+          p.mesh.position.z += Math.cos(pushAngle) * 1.2;
+          p.state = 'walking';
+          break;
+        }
+      }
+      if (!hitTarget) {
+        for (const v of this.vehicles) {
+          if (!v.isAI) continue;
+          const d = Math.hypot(
+            v.mesh.position.x - this.playerPos.x,
+            v.mesh.position.z - this.playerPos.z
+          );
+          if (d < 3.0) {
+            hitTarget = true;
+            break;
+          }
+        }
+      }
+
+      if (hitTarget) {
+        this.wantedStars = Math.min(5, this.wantedStars + 1);
+        this.wantedDecayTimer = 35;
+        this.showNotification(
+          `Keributan di Jalanan! (${'★'.repeat(this.wantedStars)})`,
+          'Warga melapor! Mobil Patroli Polisi sedang mengejarmu!',
+          'warning'
+        );
+        this.broadcastHud(true);
+      }
     }
   }
 
@@ -3705,6 +3788,166 @@ export class CityEngine {
 
       if (!v.isAI || v.waypoints.length === 0) continue;
 
+      // =====================================================================
+      // ACTIVE POLICE OFF-ROAD PURSUIT MODE (Khusus Pengejaran Mobil Polisi)
+      // When wantedStars > 0 and player is outside their safehouse, police cars
+      // break off their road loop and chase the player directly (off-road allowed!)
+      // =====================================================================
+      const isPoliceChasing =
+        v.type === 'polisi' && this.wantedStars > 0 && !this.wasInsideHome;
+
+      if (isPoliceChasing) {
+        let toPlayerX = activePos.x - v.mesh.position.x;
+        let toPlayerZ = activePos.z - v.mesh.position.z;
+        let distToPlayer = Math.hypot(toPlayerX, toPlayerZ);
+
+        // If police unit is very far (> 110m), relocate it to an open spot ~52m around player so chase feels active
+        if (distToPlayer > 110) {
+          const baseAngle =
+            (this.drivenVehicle ? this.drivenVehicle.heading : this.playerHeading) +
+            Math.PI +
+            (Math.random() - 0.5) * 1.4;
+          for (let attempt = 0; attempt < 6; attempt++) {
+            const tryAngle = baseAngle + attempt * 0.9;
+            const spawnDist = 48 + (attempt % 2) * 10;
+            const tx = THREE.MathUtils.clamp(
+              activePos.x + Math.sin(tryAngle) * spawnDist,
+              -175,
+              175
+            );
+            const tz = THREE.MathUtils.clamp(
+              activePos.z + Math.cos(tryAngle) * spawnDist,
+              -175,
+              175
+            );
+            if (!this.checkBuildingCollision(tx, tz, 2.2)) {
+              v.mesh.position.set(tx, 0, tz);
+              v.heading = Math.atan2(activePos.x - tx, activePos.z - tz);
+              toPlayerX = activePos.x - tx;
+              toPlayerZ = activePos.z - tz;
+              distToPlayer = Math.hypot(toPlayerX, toPlayerZ);
+              break;
+            }
+          }
+        }
+
+        // Direct off-road heading toward player
+        let desiredHeading = Math.atan2(toPlayerX, toPlayerZ);
+
+        // Smart building obstacle avoidance while cutting off-road across sidewalks/parks/alleys
+        const lookAhead = 4.4;
+        const probeX = v.mesh.position.x + Math.sin(desiredHeading) * lookAhead;
+        const probeZ = v.mesh.position.z + Math.cos(desiredHeading) * lookAhead;
+        if (this.checkBuildingCollision(probeX, probeZ, 1.45)) {
+          const candidateOffsets = [0.55, -0.55, 1.05, -1.05, 1.55, -1.55, 2.1, -2.1];
+          for (const offset of candidateOffsets) {
+            const testH = desiredHeading + offset;
+            const tx = v.mesh.position.x + Math.sin(testH) * lookAhead;
+            const tz = v.mesh.position.z + Math.cos(testH) * lookAhead;
+            if (!this.checkBuildingCollision(tx, tz, 1.4)) {
+              desiredHeading = testH;
+              break;
+            }
+          }
+        }
+
+        let angleDiff = desiredHeading - v.heading;
+        while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+        while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+
+        const chaseTurnRate = 7.2;
+        v.heading +=
+          Math.sign(angleDiff) * Math.min(Math.abs(angleDiff), chaseTurnRate * dt);
+
+        const chaseMaxSpeed = 18.0 + this.wantedStars * 1.6;
+        v.speed = THREE.MathUtils.damp(v.speed, chaseMaxSpeed, 4.5, dt);
+
+        const stepX = v.mesh.position.x + Math.sin(v.heading) * v.speed * dt;
+        const stepZ = v.mesh.position.z + Math.cos(v.heading) * v.speed * dt;
+
+        // Allow free off-road movement anywhere outside solid building colliders
+        let moved = false;
+        if (!this.checkBuildingCollision(stepX, v.mesh.position.z, 1.3)) {
+          v.mesh.position.x = stepX;
+          moved = true;
+        }
+        if (!this.checkBuildingCollision(v.mesh.position.x, stepZ, 1.3)) {
+          v.mesh.position.z = stepZ;
+          moved = true;
+        }
+        if (!moved) {
+          // Reverse & turn away if wedged against a building corner
+          v.heading += 1.25;
+          v.speed = -6.0;
+        }
+
+        v.mesh.rotation.y = v.heading;
+        v.mesh.rotation.z = THREE.MathUtils.damp(
+          v.mesh.rotation.z,
+          -angleDiff * 0.1,
+          7,
+          dt
+        );
+
+        const wheels = v.mesh.userData.wheels as THREE.Object3D[] | undefined;
+        if (wheels) {
+          wheels.forEach((w) => {
+            w.rotation.x += v.speed * dt * 1.8;
+          });
+        }
+
+        // Check Police Pursuit Intercept / Ramming against Player
+        const hitRadius = this.drivenVehicle ? 3.2 : 2.3;
+        if (distToPlayer < hitRadius) {
+          const lastHit = (v.mesh.userData.lastHitTime as number) || 0;
+          if (elapsed - lastHit > 1.15) {
+            v.mesh.userData.lastHitTime = elapsed;
+            soundFX.playImpactThud();
+            this.wantedDecayTimer = Math.max(this.wantedDecayTimer, 30);
+
+            if (this.drivenVehicle) {
+              this.drivenVehicle.speed *= -0.35;
+              v.speed = -6.5;
+              this.health = Math.max(0, this.health - 6);
+              this.showNotification(
+                'Disergap Mobil Patroli Polisi! (-6 HP)',
+                'Polisi menabrak kendaraanmu! Segera menghindar ke Bengkel Cat atau Rumah Pribadi!',
+                'warning'
+              );
+            } else {
+              // Knock player slightly back on foot
+              const pushH = Math.atan2(toPlayerX, toPlayerZ);
+              const px = this.playerPos.x + Math.sin(pushH) * 1.8;
+              const pz = this.playerPos.z + Math.cos(pushH) * 1.8;
+              if (!this.checkBuildingCollision(px, pz, 0.55)) {
+                this.playerPos.x = px;
+                this.playerPos.z = pz;
+              }
+              v.speed = -5.0;
+              this.health = Math.max(0, this.health - 8);
+              this.showNotification(
+                'Tertabrak Mobil Polisi! (-8 HP)',
+                'Lari ke gang sempit, masuk kendaraan, atau sembunyi di Rumah Pribadi!',
+                'warning'
+              );
+            }
+
+            if (this.health <= 0) {
+              this.money = Math.max(0, this.money - 15000);
+              this.health = this.maxHealth;
+              this.wantedStars = 0;
+              this.showNotification(
+                'Tertangkap Polisi! (Denda Rp 15.000)',
+                'Status buronan dibersihkan dan kesehatanmu telah pulih kembali.',
+                'warning'
+              );
+            }
+            this.broadcastHud(true);
+          }
+        }
+        continue;
+      }
+
       const prevWP = v.waypoints[(v.waypointIdx - 1 + v.waypoints.length) % v.waypoints.length];
       const currWP = v.waypoints[v.waypointIdx];
       const nextWP = v.waypoints[(v.waypointIdx + 1) % v.waypoints.length];
@@ -3813,9 +4056,7 @@ export class CityEngine {
       }
 
       const baseCruise =
-        v.type === 'polisi' && this.wantedStars > 0
-          ? 18.5
-          : v.type === 'ojol_motor'
+        v.type === 'ojol_motor'
           ? 15.0
           : v.type === 'polisi'
           ? 14.0
@@ -3849,7 +4090,7 @@ export class CityEngine {
       let nz = v.mesh.position.z + Math.cos(v.heading) * v.speed * dt;
 
       // Active Lane-Centering (Cross-Track Error Correction) along straight road corridors
-      if (distToWP > 4.0) {
+      if (distToWP > 4.0 && v.type !== 'polisi') {
         if (isNS) {
           nx = THREE.MathUtils.damp(nx, currWP.x, 7.5, dt);
         } else if (isEW) {
@@ -3857,7 +4098,7 @@ export class CityEngine {
         }
       }
 
-      // Airtight Road Corridor Boundary Safety Net (Ensures vehicle never veers into sidewalk/blocks)
+      // Airtight Road Corridor Boundary Safety Net (for civilian vehicles; police cars can smoothly return from off-road)
       let minDiffX = 999;
       let nearestGX = 0;
       for (const gx of ROAD_GRID_LINES) {
@@ -3880,7 +4121,11 @@ export class CityEngine {
 
       // Asphalt roadway width is 14m (center ±7.0m). Safe vehicle envelope is ±5.6m.
       const SAFE_ROAD_HALF_WIDTH = 5.6;
-      if (minDiffX > SAFE_ROAD_HALF_WIDTH && minDiffZ > SAFE_ROAD_HALF_WIDTH) {
+      if (
+        v.type !== 'polisi' &&
+        minDiffX > SAFE_ROAD_HALF_WIDTH &&
+        minDiffZ > SAFE_ROAD_HALF_WIDTH
+      ) {
         if (minDiffX <= minDiffZ) {
           const sign = Math.sign(nx - nearestGX) || 1;
           nx = nearestGX + sign * SAFE_ROAD_HALF_WIDTH;
@@ -3915,18 +4160,20 @@ export class CityEngine {
           v.mesh.position.x - this.drivenVehicle.mesh.position.x,
           v.mesh.position.z - this.drivenVehicle.mesh.position.z
         );
-        if (distVeh < 2.8 && Math.abs(this.drivenVehicle.speed) > 8) {
+        if (distVeh < 3.0 && Math.abs(this.drivenVehicle.speed) > 6.5) {
           soundFX.playImpactThud();
           this.drivenVehicle.speed *= -0.4;
-          if (v.type === 'polisi') {
-            this.wantedStars = Math.min(5, Math.max(1, this.wantedStars + 1));
-            this.wantedDecayTimer = 25;
-            this.showNotification(
-              'Menabrak Mobil Patroli!',
-              'Polisi mengejarmu! Kunjungi Bengkel Cat untuk hapus bintang.',
-              'warning'
-            );
-          }
+          const addedStars = v.type === 'polisi' ? 2 : 1;
+          this.wantedStars = Math.min(5, this.wantedStars + addedStars);
+          this.wantedDecayTimer = 35;
+          this.showNotification(
+            v.type === 'polisi'
+              ? `Menabrak Mobil Patroli! (${'★'.repeat(this.wantedStars)})`
+              : `Tabrak Lari di Jalan Raya! (${'★'.repeat(this.wantedStars)})`,
+            'Mobil Patroli Polisi sedang mengejarmu lintas jalur! Pergi ke Bengkel Cat atau Rumah Pribadi.',
+            'warning'
+          );
+          this.broadcastHud(true);
         }
       }
     }

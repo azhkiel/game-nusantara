@@ -352,8 +352,10 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
 
               {/* Minimalist MENU Button */}
               <button
+                type="button"
+                onPointerDown={(e) => e.stopPropagation()}
                 onClick={() => setIsMenuOpen(true)}
-                className="flex items-center gap-1 rounded-lg bg-black/40 hover:bg-black/60 active:bg-white/20 border border-white/20 px-2.5 py-1 text-[11px] font-bold text-white shadow-lg backdrop-blur-xs active:scale-95 cursor-pointer"
+                className="flex items-center gap-1 rounded-lg bg-black/40 hover:bg-black/60 active:bg-white/20 border border-white/20 px-2.5 py-1 text-[11px] font-bold text-white shadow-lg backdrop-blur-xs active:scale-95 touch-manipulation cursor-pointer"
               >
                 <Menu className="h-3.5 w-3.5 text-amber-300" />
                 <span>MENU</span>
@@ -370,6 +372,8 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
 
             {/* Live GPS Coordinates Badge on Main Screen HUD (Tap to copy) */}
             <button
+              type="button"
+              onPointerDown={(e) => e.stopPropagation()}
               onClick={() => {
                 const text = `Area Bermasalah: X: ${Math.round(hud.playerCoords.x)}, Z: ${Math.round(hud.playerCoords.z)} (${hud.districtName})`;
                 if (navigator.clipboard) {
@@ -378,7 +382,7 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
                 setCoordCopied(true);
                 setTimeout(() => setCoordCopied(false), 2000);
               }}
-              className="flex items-center gap-1 rounded-md bg-black/60 hover:bg-black/80 active:bg-amber-500/30 border border-white/20 px-2 py-0.5 text-[10px] font-mono font-bold text-amber-300 drop-shadow backdrop-blur-xs cursor-pointer active:scale-95 transition-transform"
+              className="flex items-center gap-1 rounded-md bg-black/60 hover:bg-black/80 active:bg-amber-500/30 border border-white/20 px-2 py-0.5 text-[10px] font-mono font-bold text-amber-300 drop-shadow backdrop-blur-xs cursor-pointer active:scale-95 touch-manipulation transition-transform"
               title="Ketuk untuk salin koordinat bug posisi ini"
             >
               <span className="text-slate-400 font-sans font-semibold text-[9px]">GPS:</span>
@@ -395,9 +399,11 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
             <div className="flex items-center gap-2">
               {/* Audio Mute Icon Button */}
               <button
+                type="button"
+                onPointerDown={(e) => e.stopPropagation()}
                 onClick={onToggleMute}
                 aria-label="Toggle Suara"
-                className="flex h-7 w-7 items-center justify-center rounded-full bg-black/30 hover:bg-black/50 border border-white/20 text-white shadow-md backdrop-blur-xs active:scale-95 cursor-pointer"
+                className="flex h-7 w-7 items-center justify-center rounded-full bg-black/30 hover:bg-black/50 border border-white/20 text-white shadow-md backdrop-blur-xs active:scale-95 touch-manipulation cursor-pointer"
               >
                 {isMuted ? (
                   <VolumeX className="h-3.5 w-3.5 text-rose-400" />
@@ -472,8 +478,10 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
                   </span>
                 ))}
                 <button
+                  type="button"
+                  onPointerDown={(e) => e.stopPropagation()}
                   onClick={onClearWanted}
-                  className="ml-1 rounded bg-rose-600/90 hover:bg-rose-500 px-1.5 py-0.5 text-[9px] font-black text-white active:scale-95 cursor-pointer"
+                  className="ml-1 rounded bg-rose-600/90 hover:bg-rose-500 px-1.5 py-0.5 text-[9px] font-black text-white active:scale-95 touch-manipulation cursor-pointer"
                 >
                   HAPUS
                 </button>
@@ -500,8 +508,10 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
                 </p>
               </div>
               <button
+                type="button"
+                onPointerDown={(e) => e.stopPropagation()}
                 onClick={onCancelMission}
-                className="rounded-lg bg-rose-600/80 hover:bg-rose-500 px-2.5 py-1 text-[11px] font-bold text-white active:scale-95 shrink-0 cursor-pointer"
+                className="rounded-lg bg-rose-600/80 hover:bg-rose-500 px-2.5 py-1 text-[11px] font-bold text-white active:scale-95 shrink-0 touch-manipulation cursor-pointer"
               >
                 Batal
               </button>
@@ -511,8 +521,10 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
           {/* Minimalist Floating Shop Prompt Button (Small non-intrusive badge) */}
           {hud.nearbySpot && !isShopModalOpen && !isMenuOpen && !hud.isInsideHome && (
             <button
+              type="button"
+              onPointerDown={(e) => e.stopPropagation()}
               onClick={() => setIsShopModalOpen(true)}
-              className="pointer-events-auto flex items-center gap-1.5 rounded-full bg-slate-950/85 hover:bg-slate-900 border border-emerald-400/80 px-2.5 py-1 text-white shadow-lg backdrop-blur-md active:scale-95 transition-all cursor-pointer"
+              className="pointer-events-auto flex items-center gap-1.5 rounded-full bg-slate-950/85 hover:bg-slate-900 border border-emerald-400/80 px-2.5 py-1 text-white shadow-lg backdrop-blur-md active:scale-95 transition-all touch-manipulation cursor-pointer"
             >
               <Utensils className="h-3 w-3 text-emerald-400" />
               <span className="text-[11px] font-bold text-white">
@@ -530,8 +542,10 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
               {!isHomeMenuOpen ? (
                 <>
                   <button
+                    type="button"
+                    onPointerDown={(e) => e.stopPropagation()}
                     onClick={() => setIsHomeMenuOpen(true)}
-                    className="flex items-center gap-1.5 rounded-full bg-slate-950/85 hover:bg-slate-900 border border-sky-400/75 px-2.5 py-1 text-[11px] font-bold text-white shadow-lg backdrop-blur-md active:scale-95 transition-transform cursor-pointer"
+                    className="flex items-center gap-1.5 rounded-full bg-slate-950/85 hover:bg-slate-900 border border-sky-400/75 px-3 py-1 text-[11px] font-bold text-white shadow-lg backdrop-blur-md active:scale-95 transition-transform touch-manipulation cursor-pointer"
                   >
                     <Home className="h-3 w-3 text-sky-400" />
                     <span>Rumah</span>
@@ -542,30 +556,38 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
 
                   {hud.playerHomeState !== 'standing' && (
                     <button
+                      type="button"
+                      onPointerDown={(e) => e.stopPropagation()}
                       onClick={() => onHomeAction('stand')}
-                      className="flex items-center gap-1 rounded-full bg-amber-400 hover:bg-amber-300 px-2.5 py-1 text-[10px] font-black text-slate-950 shadow-md active:scale-95 cursor-pointer"
+                      className="flex items-center gap-1 rounded-full bg-amber-400 hover:bg-amber-300 px-2.5 py-1 text-[10px] font-black text-slate-950 shadow-md active:scale-95 touch-manipulation cursor-pointer"
                     >
                       <span>Berdiri</span>
                     </button>
                   )}
 
                   <button
+                    type="button"
+                    onPointerDown={(e) => e.stopPropagation()}
                     onClick={() => onHomeAction('exit')}
                     title="Keluar Rumah"
-                    className="flex items-center gap-1 rounded-full bg-rose-600/90 hover:bg-rose-500 border border-rose-400/50 px-2 py-1 text-[10px] font-bold text-white shadow-md active:scale-95 cursor-pointer"
+                    className="flex items-center gap-1 rounded-full bg-rose-600/90 hover:bg-rose-500 border border-rose-400/50 px-2.5 py-1 text-[10px] font-bold text-white shadow-md active:scale-95 touch-manipulation cursor-pointer"
                   >
                     <DoorOpen className="h-3 w-3" />
                     <span>Keluar</span>
                   </button>
                 </>
               ) : (
-                <div className="flex flex-wrap items-center justify-center gap-1 rounded-full bg-slate-950/90 border border-sky-400/70 px-2 py-1 shadow-xl backdrop-blur-md">
+                <div
+                  onPointerDown={(e) => e.stopPropagation()}
+                  className="flex flex-wrap items-center justify-center gap-1 rounded-full bg-slate-950/90 border border-sky-400/70 px-2 py-1 shadow-xl backdrop-blur-md"
+                >
                   <button
+                    type="button"
                     onClick={() => {
                       onHomeAction('sleep');
                       setIsHomeMenuOpen(false);
                     }}
-                    className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold active:scale-95 cursor-pointer ${
+                    className={`flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-bold active:scale-95 touch-manipulation cursor-pointer ${
                       hud.playerHomeState === 'sleeping'
                         ? 'bg-sky-400 text-slate-950'
                         : 'bg-slate-800 hover:bg-slate-700 text-sky-200'
@@ -576,11 +598,12 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
                   </button>
 
                   <button
+                    type="button"
                     onClick={() => {
                       onHomeAction('eat');
                       setIsHomeMenuOpen(false);
                     }}
-                    className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold active:scale-95 cursor-pointer ${
+                    className={`flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-bold active:scale-95 touch-manipulation cursor-pointer ${
                       hud.playerHomeState === 'eating'
                         ? 'bg-emerald-400 text-slate-950'
                         : 'bg-slate-800 hover:bg-slate-700 text-emerald-200'
@@ -591,11 +614,12 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
                   </button>
 
                   <button
+                    type="button"
                     onClick={() => {
                       onHomeAction(hud.playerHomeState === 'sitting' ? 'stand' : 'sit');
                       setIsHomeMenuOpen(false);
                     }}
-                    className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold active:scale-95 cursor-pointer ${
+                    className={`flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-bold active:scale-95 touch-manipulation cursor-pointer ${
                       hud.playerHomeState === 'sitting'
                         ? 'bg-amber-400 text-slate-950'
                         : 'bg-slate-800 hover:bg-slate-700 text-amber-200'
@@ -606,22 +630,24 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
                   </button>
 
                   <button
+                    type="button"
                     onClick={() => {
                       onHomeAction('exit');
                       setIsHomeMenuOpen(false);
                     }}
-                    className="flex items-center gap-1 rounded-full bg-rose-600 hover:bg-rose-500 px-2 py-0.5 text-[10px] font-bold text-white active:scale-95 cursor-pointer"
+                    className="flex items-center gap-1 rounded-full bg-rose-600 hover:bg-rose-500 px-2.5 py-1 text-[10px] font-bold text-white active:scale-95 touch-manipulation cursor-pointer"
                   >
                     <DoorOpen className="h-3 w-3" />
                     <span>Keluar</span>
                   </button>
 
                   <button
+                    type="button"
                     onClick={() => setIsHomeMenuOpen(false)}
                     aria-label="Tutup Menu Rumah"
-                    className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] cursor-pointer active:scale-95"
+                    className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] touch-manipulation cursor-pointer active:scale-95"
                   >
-                    <X className="h-3 w-3" />
+                    <X className="h-3.5 w-3.5" />
                   </button>
                 </div>
               )}
@@ -631,8 +657,10 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
           {/* SMALL OUTDOOR BUTTON: Masuk Rumah */}
           {hud.isNearHomeDoor && !hud.isInsideHome && !isMenuOpen && (
             <button
+              type="button"
+              onPointerDown={(e) => e.stopPropagation()}
               onClick={() => onHomeAction('enter')}
-              className="pointer-events-auto flex items-center gap-1.5 rounded-full bg-slate-950/90 hover:bg-slate-900 border border-sky-400/80 px-2.5 py-1 text-[11px] font-bold text-white shadow-lg backdrop-blur-md active:scale-95 transition-all cursor-pointer"
+              className="pointer-events-auto flex items-center gap-1.5 rounded-full bg-slate-950/90 hover:bg-slate-900 border border-sky-400/80 px-3 py-1 text-[11px] font-bold text-white shadow-lg backdrop-blur-md active:scale-95 transition-all touch-manipulation cursor-pointer"
             >
               <Home className="h-3 w-3 text-sky-400" />
               <span>Masuk Rumah</span>
@@ -690,6 +718,12 @@ export const ControlOverlay: React.FC<ControlOverlayProps> = ({
           onContextAction={
             hud.nearbySpot ? () => setIsShopModalOpen(true) : onContextAction
           }
+          onHomeAction={onHomeAction}
+          onToggleHomeMenu={() => setIsHomeMenuOpen((prev) => !prev)}
+          onOpenGarage={() => {
+            setActiveTab('garasi');
+            setIsMenuOpen(true);
+          }}
           onSpawnVehicle={onSpawnVehicle}
           onChangeCamera={onChangeCamera}
         />

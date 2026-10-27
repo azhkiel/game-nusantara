@@ -13,12 +13,16 @@ import {
 } from '../types/game';
 import { soundFX } from '../utils/sound';
 import {
+  BurungVariant,
   createBengkelCat,
+  createBurungTerbang,
   createGapuraMerahPutih,
   createHutanSungaiBlock,
   createIndoalfaMinimarket,
   createIndonesianRumahKampung,
+  createKiosPasarBarat,
   createKuburanTPU,
+  createKucingKampung,
   createMasjidNusantara,
   createMonasLandmark,
   createNPCPedestrian,
@@ -47,6 +51,7 @@ import {
   createWarungKopiKampung,
   createWarungMadura,
   createWarungTenda,
+  KucingCoatType,
   TrafficLightRef,
   VendorType,
 } from './models';
@@ -123,6 +128,34 @@ export interface BuildingCollider {
   maxZ: number;
 }
 
+export interface ActiveWalkingCat {
+  mesh: THREE.Group;
+  coat: KucingCoatType;
+  heading: number;
+  speed: number;
+  walkCycle: number;
+  waypoints: { x: number; z: number }[];
+  waypointIdx: number;
+  state: 'walking' | 'sitting';
+  timer: number;
+  duration: number;
+}
+
+export interface ActiveFlyingBird {
+  mesh: THREE.Group;
+  variant: BurungVariant;
+  centerX: number;
+  centerZ: number;
+  baseY: number;
+  radiusX: number;
+  radiusZ: number;
+  angle: number;
+  angularSpeed: number;
+  flapPhase: number;
+  flapSpeed: number;
+  figureEight: boolean;
+}
+
 export class CityEngine {
   public renderer: THREE.WebGLRenderer;
   public scene: THREE.Scene;
@@ -157,15 +190,22 @@ export class CityEngine {
   private cloudGroups: { group: THREE.Group; speed: number }[] = [];
   private rainGroup!: THREE.Group;
   private rainLines!: THREE.LineSegments;
-  private rainDropsCount = 1150;
+  private rainDropsCount = 650;
   private rainParticles!: THREE.Points;
-  private rainParticleCount = 540;
+  private rainParticleCount = 280;
   private rainSplashes!: THREE.InstancedMesh;
-  private rainSplashCount = 96;
+  private rainSplashCount = 56;
   private rainSplashPhases!: Float32Array;
   private rainSplashPositions!: Float32Array;
   private lightningTimer = 14.0;
   private lightningFlash = 0;
+  private frameCounter = 0;
+  private cullableStaticGroups: {
+    group: THREE.Object3D;
+    x: number;
+    z: number;
+    maxDistSq: number;
+  }[] = [];
 
   // Actors & World state (Initial spawn inside Player's Personal Safehouse at X: -17.8, Z: 24.0!)
   private playerMesh!: THREE.Group;
@@ -197,6 +237,8 @@ export class CityEngine {
     greetTimer: number;
   }[] = [];
   private sittingNPCs: THREE.Group[] = [];
+  private cats: ActiveWalkingCat[] = [];
+  private birds: ActiveFlyingBird[] = [];
   private colliders: BuildingCollider[] = [];
 
   // Mission Marker & GPS Arrow
@@ -266,29 +308,31 @@ export class CityEngine {
         navigator.userAgent
       ) || window.innerWidth < 800;
     this.renderer.setPixelRatio(
-      this.isSoftwareGl ? 1 : Math.min(window.devicePixelRatio, isMobileDevice ? 1.15 : 1.35)
+      this.isSoftwareGl ? 1 : Math.min(window.devicePixelRatio, isMobileDevice ? 1.0 : 1.15)
     );
     this.renderer.shadowMap.enabled = !this.isSoftwareGl;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    this.renderer.shadowMap.autoUpdate = false;
+    this.renderer.shadowMap.needsUpdate = true;
     this.renderer.setSize(
       container.clientWidth || window.innerWidth,
       container.clientHeight || window.innerHeight
     );
 
-    this.maxAnisotropy = this.renderer.capabilities.getMaxAnisotropy();
+    this.maxAnisotropy = Math.min(4, this.renderer.capabilities.getMaxAnisotropy());
     container.appendChild(this.renderer.domElement);
 
     // 3. Scene & Camera Setup
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x7dd3fc);
-    this.scene.fog = new THREE.FogExp2(0x7dd3fc, 0.0028);
+    this.scene.fog = new THREE.FogExp2(0x7dd3fc, 0.0034);
 
     this.camera = new THREE.PerspectiveCamera(
       60,
       (container.clientWidth || window.innerWidth) /
         (container.clientHeight || window.innerHeight),
-      0.2,
-      520
+      0.25,
+      260
     );
     this.camera.position.set(-22.5, 4.8, 24.0);
 
@@ -309,16 +353,167 @@ export class CityEngine {
     this.spawnVehicles();
     this.spawnPedestrians();
     this.spawnVendors();
+    this.spawnAnimals();
     this.setupMissionVisuals();
+    this.optimizeScenePerformance();
     this.bindEvents();
 
     // Pre-warm shaders on hardware GPUs
     if (!this.isSoftwareGl) {
       this.renderer.compile(this.scene, this.camera);
+      this.renderer.shadowMap.needsUpdate = true;
     }
 
     this.broadcastHud(true);
     this.startLoop();
+  }
+
+  private optimizeScenePerformance() {
+    // 1. Compute all initial world matrices once before freezing static hierarchies
+    this.scene.updateMatrixWorld(true);
+
+    // 2. Collect all dynamic roots whose transforms or materials change per-frame
+    const dynamicRoots = new Set<THREE.Object3D>();
+    if (this.playerMesh) dynamicRoots.add(this.playerMesh);
+    if (this.playerHouseDoorPivot) dynamicRoots.add(this.playerHouseDoorPivot);
+    if (this.sunGroup) dynamicRoots.add(this.sunGroup);
+    if (this.moonGroup) dynamicRoots.add(this.moonGroup);
+    if (this.starsGroup) dynamicRoots.add(this.starsGroup);
+    if (this.rainGroup) dynamicRoots.add(this.rainGroup);
+    if (this.missionBeaconGroup) dynamicRoots.add(this.missionBeaconGroup);
+    if (this.gpsArrowGroup) dynamicRoots.add(this.gpsArrowGroup);
+    if (this.keyLight) dynamicRoots.add(this.keyLight);
+    if (this.keyLightTargetObj) dynamicRoots.add(this.keyLightTargetObj);
+    for (const c of this.cloudGroups) dynamicRoots.add(c.group);
+    for (const v of this.vehicles) dynamicRoots.add(v.mesh);
+    for (const p of this.pedestrians) dynamicRoots.add(p.mesh);
+    for (const v of this.vendors) dynamicRoots.add(v.mesh);
+    for (const s of this.sittingNPCs) dynamicRoots.add(s);
+    for (const cat of this.cats) dynamicRoots.add(cat.mesh);
+    for (const bird of this.birds) dynamicRoots.add(bird.mesh);
+
+    // Excluded materials that get mutated at runtime (wet roads, streetlights, traffic light bulbs)
+    const mutableMaterials = new Set<THREE.Material>([
+      ...this.roadMaterials,
+      ...this.streetLampBulbs,
+    ]);
+    for (const sys of this.trafficLightSystems) {
+      for (const l of [...sys.nsLights, ...sys.ewLights]) {
+        l.group.traverse((child) => {
+          if ((child as THREE.Mesh).isMesh) {
+            const m = (child as THREE.Mesh).material;
+            if (Array.isArray(m)) m.forEach((mat) => mutableMaterials.add(mat));
+            else if (m) mutableMaterials.add(m);
+          }
+        });
+      }
+    }
+
+    const sharedMatMap = new Map<string, THREE.MeshStandardMaterial>();
+
+    const isInsideDynamic = (obj: THREE.Object3D): boolean => {
+      let curr: THREE.Object3D | null = obj;
+      while (curr) {
+        if (dynamicRoots.has(curr)) return true;
+        curr = curr.parent;
+      }
+      return false;
+    };
+
+    // 3. Traverse static objects: freeze matrices, deduplicate flat materials, & disable shadows on tiny props
+    this.scene.traverse((obj) => {
+      if (obj === this.scene) return;
+      const dynamic = isInsideDynamic(obj);
+
+      if (!dynamic) {
+        obj.matrixAutoUpdate = false;
+      }
+
+      if ((obj as THREE.Mesh).isMesh) {
+        const mesh = obj as THREE.Mesh;
+
+        // Deduplicate flat-colored static MeshStandardMaterials to minimize WebGL state switches
+        if (
+          !dynamic &&
+          !(mesh as THREE.InstancedMesh).isInstancedMesh &&
+          !Array.isArray(mesh.material) &&
+          (mesh.material as THREE.MeshStandardMaterial).isMeshStandardMaterial
+        ) {
+          const stdMat = mesh.material as THREE.MeshStandardMaterial;
+          if (
+            !mutableMaterials.has(stdMat) &&
+            !stdMat.map &&
+            !stdMat.transparent &&
+            stdMat.emissiveIntensity === 0 &&
+            !stdMat.vertexColors
+          ) {
+            const key = `${stdMat.color.getHexString()}_${stdMat.roughness.toFixed(2)}_${stdMat.metalness.toFixed(2)}_${stdMat.side}_${stdMat.flatShading ? 1 : 0}`;
+            const cached = sharedMatMap.get(key);
+            if (cached) {
+              if (cached !== stdMat) {
+                mesh.material = cached;
+                stdMat.dispose();
+              }
+            } else {
+              sharedMatMap.set(key, stdMat);
+            }
+          }
+        }
+
+        // Disable shadow casting on small static decorative details (bounding radius < 0.75m)
+        if (!dynamic && mesh.castShadow && !(mesh as THREE.InstancedMesh).isInstancedMesh) {
+          if (!mesh.geometry.boundingSphere) {
+            mesh.geometry.computeBoundingSphere();
+          }
+          const radius = mesh.geometry.boundingSphere?.radius ?? 1;
+          const maxScale = Math.max(mesh.scale.x, mesh.scale.y, mesh.scale.z);
+          if (radius * maxScale < 0.78) {
+            mesh.castShadow = false;
+          }
+        }
+      }
+    });
+
+    // 4. Register top-level static building/landmark/kampung groups for fast distance culling
+    this.cullableStaticGroups = [];
+    for (const child of this.scene.children) {
+      if (dynamicRoots.has(child)) continue;
+      if (child === this.playerHouseGroup) continue;
+      if ((child as THREE.Light).isLight) continue;
+      if ((child as THREE.InstancedMesh).isInstancedMesh) continue;
+
+      // Only cull localized static groups (buildings, landmarks, market halls, trees, stalls)
+      if (child.type === 'Group') {
+        const px = child.position.x;
+        const pz = child.position.z;
+        // Skip global origin groups like outerRiver at (0,0)
+        if (Math.abs(px) < 0.01 && Math.abs(pz) < 0.01) continue;
+        // Give major landmarks slightly larger visibility distance (160m) vs normal houses/props (128m)
+        const isMajorLandmark =
+          (Math.abs(px - -90) < 5 && Math.abs(pz - -30) < 5) ||
+          (Math.abs(px - 90) < 5 && Math.abs(pz - 30) < 5) ||
+          (Math.abs(px - 158.5) < 5 && Math.abs(pz - -50) < 5);
+        const maxDist = isMajorLandmark ? 165 : 128;
+        this.cullableStaticGroups.push({
+          group: child,
+          x: px,
+          z: pz,
+          maxDistSq: maxDist * maxDist,
+        });
+      }
+    }
+  }
+
+  private updateStaticCulling(camX: number, camZ: number) {
+    for (let i = 0; i < this.cullableStaticGroups.length; i++) {
+      const item = this.cullableStaticGroups[i];
+      const dx = item.x - camX;
+      const dz = item.z - camZ;
+      const visible = dx * dx + dz * dz <= item.maxDistSq;
+      if (item.group.visible !== visible) {
+        item.group.visible = visible;
+      }
+    }
   }
 
   private setupLighting() {
@@ -327,14 +522,14 @@ export class CityEngine {
     this.keyLight.castShadow = !this.isSoftwareGl;
     this.keyLight.shadow.mapSize.width = 1024;
     this.keyLight.shadow.mapSize.height = 1024;
-    const d = 65;
+    const d = 44;
     this.keyLight.shadow.camera.left = -d;
     this.keyLight.shadow.camera.right = d;
     this.keyLight.shadow.camera.top = d;
     this.keyLight.shadow.camera.bottom = -d;
-    this.keyLight.shadow.camera.near = 10;
-    this.keyLight.shadow.camera.far = 240;
-    this.keyLight.shadow.bias = -0.0004;
+    this.keyLight.shadow.camera.near = 15;
+    this.keyLight.shadow.camera.far = 200;
+    this.keyLight.shadow.bias = -0.0005;
     this.keyLight.shadow.normalBias = 0.02;
     this.keyLightTargetObj.position.set(-8.5, 0, 28);
     this.scene.add(this.keyLightTargetObj);
@@ -1022,26 +1217,26 @@ export class CityEngine {
     this.scene.add(posKamling);
     this.colliders.push({ minX: -153.5, maxX: -145.0, minZ: -40.5, maxZ: -32.5 });
 
-    // d) Toko Kelontong Sembako Bu Tejo (-135, -28.5) — Toko Sembako, Beras, Gas Melon 3kg & Kerupuk Blek
+    // d) Toko Kelontong Sembako Bu Tejo (-134.2, -20.5) — Cleanly between Gang Merpati (z = -30) & Warkop, clear of Gang Utama (x = -142) & Main Road (x = -120)
     const tokoSembako = createWarungKelontongKampung(this.maxAnisotropy);
-    tokoSembako.position.set(-135.0, 0, -28.5);
-    tokoSembako.rotation.y = -Math.PI / 2; // Facing West toward Gang Utama & Gang Merpati
+    tokoSembako.position.set(-134.2, 0, -20.5);
+    tokoSembako.rotation.y = -Math.PI / 2; // Facing West toward Gang Utama
     this.scene.add(tokoSembako);
-    this.colliders.push({ minX: -139.0, maxX: -131.0, minZ: -32.5, maxZ: -24.5 });
+    this.colliders.push({ minX: -137.8, maxX: -130.6, minZ: -24.0, maxZ: -17.0 });
 
-    // e) Warkop Mbah Darmo (-135, -14.0) — Warung Kopi Tubruk Joss & Gorengan Mendoan Hangat
+    // e) Warkop Mbah Darmo (-134.2, -9.0) — Warung Kopi Tubruk Joss & Gorengan Mendoan Hangat
     const warkopMbahDarmo = createWarungKopiKampung(this.maxAnisotropy);
-    warkopMbahDarmo.position.set(-135.0, 0, -14.0);
+    warkopMbahDarmo.position.set(-134.2, 0, -9.0);
     warkopMbahDarmo.rotation.y = -Math.PI / 2; // Facing West toward Gang Utama
     this.scene.add(warkopMbahDarmo);
-    this.colliders.push({ minX: -138.8, maxX: -131.2, minZ: -17.5, maxZ: -10.5 });
+    this.colliders.push({ minX: -137.8, maxX: -130.6, minZ: -12.5, maxZ: -5.5 });
 
-    // f) Toko Kelontong Madura 24 Jam (-150, 28.5) — Buka 24 Jam dengan Pertamini & Gas 3kg
+    // f) Toko Kelontong Madura 24 Jam (-150.5, 32.0) — Cleanly South of Gang Mawar RT 02 (z = 24)
     const warungMadura = createWarungMadura(this.maxAnisotropy, this.isSoftwareGl);
-    warungMadura.position.set(-150.0, 0, 28.5);
+    warungMadura.position.set(-150.5, 0, 32.0);
     warungMadura.rotation.y = Math.PI / 2; // Facing East toward Gang Utama
     this.scene.add(warungMadura);
-    this.colliders.push({ minX: -155.5, maxX: -145.0, minZ: 25.0, maxZ: 32.5 });
+    this.colliders.push({ minX: -155.5, maxX: -145.5, minZ: 28.2, maxZ: 35.8 });
 
     // f2) Kuburan / TPU Kamboja Nusantara (-156.5, 77.5) — Tempat Pemakaman Umum Warga, Batu Nisan Kembar, Pohon Kamboja & Kios Bunga Tabur
     const kuburanTPU = createKuburanTPU(this.maxAnisotropy);
@@ -1053,36 +1248,34 @@ export class CityEngine {
     this.colliders.push({ minX: -164.5, maxX: -149.0, minZ: 68.2, maxZ: 69.2 }); // North wall
     this.colliders.push({ minX: -164.5, maxX: -149.0, minZ: 85.8, maxZ: 86.8 }); // South wall
 
-    // f3) TPS 04 Kampung Nusantara (-134.5, -62.0) — Tempat Pemungutan Suara (Tenda KPPS, Bilik Suara, Kotak Suara Transparan & Tinta Ungu)
+    // f3) TPS 04 Kampung Nusantara (-134.2, -56.0) — Cleanly between Gang Utama (x = -142) and Main Road (x = -120)
     const tpsPemilu = createTPSPemilu(this.maxAnisotropy);
-    tpsPemilu.position.set(-134.5, 0, -62.0);
+    tpsPemilu.position.set(-134.2, 0, -56.0);
     tpsPemilu.rotation.y = -Math.PI / 2; // Facing West (-X) toward Gang Utama
     this.scene.add(tpsPemilu);
-    this.colliders.push({ minX: -138.2, maxX: -130.8, minZ: -66.0, maxZ: -58.0 });
+    this.colliders.push({ minX: -137.8, maxX: -130.6, minZ: -59.8, maxZ: -52.2 });
 
-    // f4) TPS Lingkungan & Bank Sampah Warga RT 04 (-149.0, 15.5) — Bak Sampah Beton, Gerobak Sampah RT/RW & Tong Pilah 3 Warna
+    // f4) TPS Lingkungan & Bank Sampah Warga RT 04 (-149.5, 14.5) — Cleanly North of Gang Mawar (z = 24)
     const tpsSampahWest = createTPSSampahKampung(this.maxAnisotropy);
-    tpsSampahWest.position.set(-149.0, 0, 15.5);
+    tpsSampahWest.position.set(-149.5, 0, 14.5);
     tpsSampahWest.rotation.y = Math.PI / 2; // Facing East (+X) toward Gang Utama
     this.scene.add(tpsSampahWest);
-    this.colliders.push({ minX: -151.6, maxX: -146.5, minZ: 12.2, maxZ: 18.8 });
+    this.colliders.push({ minX: -152.1, maxX: -146.8, minZ: 11.2, maxZ: 17.8 });
 
-    // g) Expanded Indonesian Kampung Residential Houses (West Neighborhood)
+    // g) Expanded Indonesian Kampung Residential Houses (West Neighborhood — 100% clear of x = -120 main road, x = -142 gang, and z = -75, -30, 24, 65 cross-gangs!)
     const westHouses: { x: number; z: number; color: number; rotY: number }[] = [
-      // Along Gang Merpati (z = -30) & West side
-      { x: -160, z: -20, color: 0xf97316, rotY: 0 },            // Terracotta orange
-      { x: -160, z: -44, color: 0x06b6d4, rotY: Math.PI },      // Cyan blue
-      { x: -135, z: -44, color: 0xa855f7, rotY: Math.PI },      // Pastel purple
-      // Along Gang Utama (x = -142) East & West sides
-      { x: -158, z: -12, color: 0x84cc16, rotY: Math.PI / 2 },  // Lime green
+      // West side of Gang Utama (x = -158), well clear of cross-gangs
+      { x: -158, z: -18, color: 0xf97316, rotY: Math.PI / 2 },  // Terracotta orange
+      { x: -158, z: -4, color: 0x84cc16, rotY: Math.PI / 2 },   // Lime green
       { x: -158, z: 6, color: 0xfef08a, rotY: Math.PI / 2 },    // Soft cream
       { x: -158, z: 42, color: 0x38bdf8, rotY: Math.PI / 2 },   // Sky blue
       { x: -158, z: 54, color: 0x8b5cf6, rotY: Math.PI / 2 },   // Violet
-      { x: -128, z: 42, color: 0xf43f5e, rotY: -Math.PI / 2 },  // Coral red
-      { x: -128, z: -12, color: 0x10b981, rotY: -Math.PI / 2 }, // Mint green
-      { x: -135, z: 6, color: 0xeab308, rotY: -Math.PI / 2 },   // Mustard yellow
-      { x: -135, z: 24, color: 0x14b8a6, rotY: -Math.PI / 2 },  // Teal
-      { x: -135, z: 54, color: 0xf43f5e, rotY: -Math.PI / 2 },  // Rose
+      // Outer West Kampung row (x = -171), clear of cross-gangs
+      { x: -171, z: -38, color: 0x06b6d4, rotY: 0 },            // Cyan blue (facing Gang Merpati)
+      { x: -171, z: -18, color: 0xa855f7, rotY: Math.PI / 2 },  // Pastel purple
+      { x: -171, z: 14, color: 0xf43f5e, rotY: 0 },             // Coral red (facing Gang Mawar)
+      { x: -171, z: 42, color: 0x10b981, rotY: Math.PI / 2 },   // Mint green
+      { x: -171, z: 54, color: 0xeab308, rotY: Math.PI / 2 },   // Mustard yellow
     ];
     westHouses.forEach((h) => {
       const house = createIndonesianRumahKampung(h.color, this.maxAnisotropy);
@@ -1100,13 +1293,13 @@ export class CityEngine {
     // h) Tropical Kampung Plants & Trees (Pohon Pisang, Pohon Mangga Rindang, & Pot Bunga)
     // 1. Pohon Pisang (Banana trees with drooping broad leaves and banana bunch)
     const bananaPlacements: [number, number, number][] = [
-      [-153.5, -34.5, 0.2],   // Beside Pos Kamling
-      [-130.5, -24.0, -0.4],  // Beside Toko Sembako Bu Tejo
-      [-164.0, -14.0, 0.8],   // Backyard of house
-      [-154.0, 33.5, 1.2],    // Beside Toko Madura
-      [-146.5, -22.5, -0.6],  // Corner of Gang Merpati
+      [-154.5, -34.5, 0.2],   // Beside Pos Kamling
+      [-131.2, -16.0, -0.4],  // Beside Toko Sembako Bu Tejo
+      [-164.5, -11.0, 0.8],   // Backyard of house
+      [-155.5, 36.5, 1.2],    // Beside Toko Madura
+      [-146.5, -24.5, -0.6],  // Corner of Gang Merpati
       [-164.0, -70.0, 0.0],   // Near Rumah Joglo
-      [-131.0, 14.0, 0.5],    // East neighborhood yard
+      [-133.5, 12.0, 0.5],    // East neighborhood green strip (clear of road & gang)
     ];
     bananaPlacements.forEach(([bx, bz, rot]) => {
       const pisang = createPohonPisang();
@@ -1117,9 +1310,9 @@ export class CityEngine {
 
     // 2. Pohon Mangga Kampung (Shady mango trees with deep green canopy)
     const manggaPlacements: [number, number, number][] = [
-      [-154.5, -42.0, 0.5],   // Shading Pos Kamling courtyard
+      [-154.5, -42.5, 0.5],   // Shading Pos Kamling courtyard
       [-149.0, -66.0, 1.1],   // In front of Rumah Joglo
-      [-130.5, -8.5, -0.8],   // Shading Warkop Mbah Darmo
+      [-133.5, -38.0, -0.8],  // Green strip between Gang Utama & Main Road
       [-153.5, 60.0, 0.2],    // Corner of Gang Melati Barat
     ];
     manggaPlacements.forEach(([mx, mz, rot]) => {
@@ -1137,18 +1330,18 @@ export class CityEngine {
       { x: -145.8, z: -38.0, variant: 'gerabah' },
       { x: -152.0, z: -35.0, variant: 'caladium' },
       // Toko Sembako Bu Tejo storefront
-      { x: -138.8, z: -26.5, variant: 'ember_cat' },
-      { x: -138.8, z: -30.5, variant: 'gerabah' },
+      { x: -138.2, z: -18.5, variant: 'ember_cat' },
+      { x: -138.2, z: -22.5, variant: 'gerabah' },
       // Warkop Mbah Darmo
-      { x: -138.8, z: -12.0, variant: 'caladium' },
-      { x: -138.8, z: -16.0, variant: 'ember_cat' },
+      { x: -138.2, z: -7.0, variant: 'caladium' },
+      { x: -138.2, z: -11.0, variant: 'ember_cat' },
       // Gang Merpati roadside
-      { x: -152.0, z: -32.8, variant: 'gerabah' },
-      { x: -162.0, z: -32.8, variant: 'ember_cat' },
-      { x: -135.0, z: -32.8, variant: 'caladium' },
+      { x: -152.0, z: -33.2, variant: 'gerabah' },
+      { x: -162.0, z: -33.2, variant: 'ember_cat' },
+      { x: -135.0, z: -33.2, variant: 'caladium' },
       // Toko Madura front
-      { x: -145.8, z: 25.5, variant: 'ember_cat' },
-      { x: -145.8, z: 31.5, variant: 'gerabah' },
+      { x: -145.8, z: 29.5, variant: 'ember_cat' },
+      { x: -145.8, z: 34.5, variant: 'gerabah' },
     ];
     potConfigs.forEach((pc) => {
       const pot = createPotBungaKampung(pc.variant);
@@ -1169,8 +1362,12 @@ export class CityEngine {
     // North-South Main Gang Jalan Pasar & Kampung (x = 142, from z = -80 to z = 75)
     addGangSegment('ns', 142, -80, 75, 5.4);
 
+    // Wide Paved Market Promenade Apron connecting Gang Pasar (x = 142) to Pasar Raya & Kios Barat (z = -66 to -34)
+    addGangSegment('ew', -50, 136.0, 152.0, 6.2);
+
     // Connecting East-West Gang Alleys branching cleanly without z-fighting:
     const eastCrossAlleys = [
+      { z: -75, name: 'Gang Pasar Utara' },
       { z: -25, name: 'Gang Pasar Rakyat' },
       { z: 30, name: 'Gang Melati RT 01' },
       { z: 65, name: 'Gang Kenanga' },
@@ -1182,6 +1379,7 @@ export class CityEngine {
 
     // Portals for East District
     const eastPortals = [
+      { name: 'Gang Pasar Utara', z: -75 },
       { name: 'Gang Pasar Rakyat', z: -25 },
       { name: 'Gang Melati RT 01', z: 30 },
       { name: 'Gang Kenanga', z: 65 },
@@ -1193,14 +1391,68 @@ export class CityEngine {
       this.scene.add(portal);
     });
 
-    // a) Pasar Tradisional Rakyat (142, -50) — Los Pasar Khas Indonesia dengan Terpal Warna-Warni & Gerobak Buah
+    // a) Expanded Pasar Raya Tradisional Rakyat (158.5, -50.0) — Walk-in 36m x 24m Market Hall & Culinary Plaza!
     const pasar = createPasarTradisional(this.maxAnisotropy);
-    pasar.position.set(142, 0, -50);
-    pasar.rotation.y = 0; // Facing South toward Gang Pasar
+    pasar.position.set(158.5, 0, -50.0);
+    pasar.rotation.y = -Math.PI / 2; // Front Gate (+Z) faces West (-X) toward Gang Pasar (x = 142)
     this.scene.add(pasar);
-    this.colliders.push({ minX: 127.5, maxX: 156.5, minZ: -60, maxZ: -38 });
+    // Individual stall colliders inside Pasar Raya so the player can freely walk through all market aisles!
+    this.colliders.push({ minX: 149.2, maxX: 151.6, minZ: -60.8, maxZ: -56.2 }); // Front North Jajan Pasar & Dawet Stall
+    this.colliders.push({ minX: 149.2, maxX: 151.6, minZ: -43.8, maxZ: -39.2 }); // Front South Buah Tropis & Jamu Stall
+    this.colliders.push({ minX: 154.8, maxX: 157.0, minZ: -64.8, maxZ: -53.6 }); // Blok A1: Los Sayur Mayur & Sembako
+    this.colliders.push({ minX: 154.8, maxX: 157.0, minZ: -46.4, maxZ: -35.2 }); // Blok A2: Los Buah Segar Nusantara
+    this.colliders.push({ minX: 163.4, maxX: 165.6, minZ: -64.8, maxZ: -53.6 }); // Blok B1: Los Daging Sapi & Ayam Potong
+    this.colliders.push({ minX: 163.4, maxX: 165.6, minZ: -46.4, maxZ: -35.2 }); // Blok B2: Los Ikan Laut & Tambak
+    this.colliders.push({ minX: 166.0, maxX: 167.8, minZ: -52.2, maxZ: -47.8 }); // Blok C: Los Bumbu Rempah, Tempe & Tahu
 
-    // b) Warung Kopi Joss & Es Kelapa Muda (130, -18)
+    // a2) Deretan Kios Pasar Barat Blok B (134.0, -50.0) — Kios Batik/Pakaian, Warung Ikan/Ayam Bakar Haji Rozak & Grosir Sembako
+    const kiosPasarBarat = createKiosPasarBarat(this.maxAnisotropy);
+    kiosPasarBarat.position.set(134.0, 0, -50.0);
+    kiosPasarBarat.rotation.y = Math.PI / 2; // Facing East (+X) toward Gang Pasar & Main Market Hall
+    this.scene.add(kiosPasarBarat);
+    this.colliders.push({ minX: 131.0, maxX: 135.4, minZ: -61.5, maxZ: -38.5 });
+
+    // a3) Shady Market Trees & Potted Plants around Kawasan Pasar Tradisional Rakyat
+    const pasarMangoPlacements: [number, number, number][] = [
+      [133.5, -66.5, 0.4],
+      [133.5, -33.5, -0.5],
+      [148.5, -70.0, 0.8],
+      [148.5, -30.0, -0.7],
+    ];
+    pasarMangoPlacements.forEach(([mx, mz, rot]) => {
+      const mangga = createPohonManggaKampung();
+      mangga.position.set(mx, 0, mz);
+      mangga.rotation.y = rot;
+      this.scene.add(mangga);
+      this.colliders.push({ minX: mx - 1.6, maxX: mx + 1.6, minZ: mz - 1.6, maxZ: mz + 1.6 });
+    });
+
+    const pasarBananaPlacements: [number, number, number][] = [
+      [131.2, -63.0, 0.3],
+      [131.2, -36.5, 1.1],
+      [168.5, -69.5, -0.4],
+      [168.5, -30.5, 0.6],
+    ];
+    pasarBananaPlacements.forEach(([bx, bz, rot]) => {
+      const pisang = createPohonPisang();
+      pisang.position.set(bx, 0, bz);
+      pisang.rotation.y = rot;
+      this.scene.add(pisang);
+    });
+
+    const pasarPots: { x: number; z: number; variant: 'ember_cat' | 'gerabah' | 'caladium' }[] = [
+      { x: 146.6, z: -53.2, variant: 'gerabah' },
+      { x: 146.6, z: -46.8, variant: 'ember_cat' },
+      { x: 136.8, z: -54.5, variant: 'caladium' },
+      { x: 136.8, z: -45.5, variant: 'gerabah' },
+    ];
+    pasarPots.forEach((pp) => {
+      const pot = createPotBungaKampung(pp.variant);
+      pot.position.set(pp.x, 0, pp.z);
+      this.scene.add(pot);
+    });
+
+    // b) Warung Kopi Joss & Es Kelapa Muda (153.5, -14.0) — Cleanly East of Gang Pasar (x = 142), South of z = -25
     const warungKopi = createWarungTenda(
       'WARUNG KOPI & ES KELAPA MUDA',
       'KOPI JOSS ARANG · GORENGAN HANGAT',
@@ -1208,24 +1460,24 @@ export class CityEngine {
       '#ea580c',
       this.maxAnisotropy
     );
-    warungKopi.position.set(130, 0, -18);
-    warungKopi.rotation.y = 0;
+    warungKopi.position.set(153.5, 0, -14.0);
+    warungKopi.rotation.y = -Math.PI / 2;
     this.scene.add(warungKopi);
-    this.colliders.push({ minX: 126, maxX: 134, minZ: -21, maxZ: -15 });
+    this.colliders.push({ minX: 150.0, maxX: 157.0, minZ: -17.5, maxZ: -10.5 });
 
-    // b2) TPS Lingkungan & Bank Sampah Pasar Rakyat (149.5, -14.0)
+    // b2) TPS Lingkungan & Bank Sampah Pasar Rakyat (150.5, -3.0)
     const tpsSampahEast = createTPSSampahKampung(this.maxAnisotropy);
-    tpsSampahEast.position.set(149.5, 0, -14.0);
+    tpsSampahEast.position.set(150.5, 0, -3.0);
     tpsSampahEast.rotation.y = -Math.PI / 2; // Facing West toward Gang Pasar
     this.scene.add(tpsSampahEast);
-    this.colliders.push({ minX: 147.0, maxX: 152.2, minZ: -17.3, maxZ: -10.7 });
+    this.colliders.push({ minX: 148.0, maxX: 153.2, minZ: -6.3, maxZ: 0.3 });
 
-    // c) Indonesian Kampung Residential Houses (East)
+    // c) Indonesian Kampung Residential Houses (East — 100% clear of x = 120 main road, x = 142 gang, and z = -75, -25, 30, 65 cross-gangs!)
     const eastHouses: { x: number; z: number; color: number; rotY: number }[] = [
-      { x: 156, z: 10, color: 0xf59e0b, rotY: -Math.PI / 2 }, // Warm ochre
-      { x: 156, z: 30, color: 0xa855f7, rotY: -Math.PI / 2 }, // Pastel purple
-      { x: 156, z: 52, color: 0x06b6d4, rotY: -Math.PI / 2 }, // Turquoise
-      { x: 128, z: 52, color: 0xfed7aa, rotY: Math.PI / 2 },  // Cream peach
+      { x: 156, z: 12, color: 0xf59e0b, rotY: -Math.PI / 2 }, // Warm ochre (between z = -25 and z = 30)
+      { x: 156, z: 43, color: 0xa855f7, rotY: -Math.PI / 2 }, // Pastel purple (between z = 30 and z = 65)
+      { x: 156, z: 54, color: 0x06b6d4, rotY: -Math.PI / 2 }, // Turquoise (between z = 30 and z = 65)
+      { x: 170, z: 12, color: 0xfed7aa, rotY: -Math.PI / 2 }, // Cream peach
     ];
     eastHouses.forEach((h) => {
       const house = createIndonesianRumahKampung(h.color, this.maxAnisotropy);
@@ -1241,7 +1493,7 @@ export class CityEngine {
     });
 
     // Utility Poles along East Alley
-    for (const pz of [-15, 15, 48]) {
+    for (const pz of [-68, -15, 15, 48]) {
       const pole = createTiangListrikKampung();
       pole.position.set(145.2, 0, pz);
       this.scene.add(pole);
@@ -1364,9 +1616,12 @@ export class CityEngine {
     if (Math.abs(z - -30) < 4.5 && x < -118 && x > -170) return false;
     if (Math.abs(z - 24) < 4.5 && x < -118 && x > -170) return false;
     if (Math.abs(z - 65) < 4.5 && x < -118 && x > -170) return false;
+    if (Math.abs(z - -75) < 4.5 && x > 118 && x < 170) return false;
     if (Math.abs(z - -25) < 4.5 && x > 118 && x < 170) return false;
     if (Math.abs(z - 30) < 4.5 && x > 118 && x < 170) return false;
     if (Math.abs(z - 65) < 4.5 && x > 118 && x < 170) return false;
+    // Keep clear of the expanded Pasar Raya Tradisional & Kios Pasar Barat plaza
+    if (x > 128 && x < 173 && z > -72 && z < -28) return false;
 
     // 4. Keep clear of all building colliders & interactive spots
     for (const c of this.colliders) {
@@ -2336,17 +2591,28 @@ export class CityEngine {
     addLoopPedestrian(westKampungLoop, 2, 0.65, 'warga', 53, true);
     addLoopPedestrian(westKampungLoop, 1, 0.8, 'pekerja_batik', 56, false);
 
-    // f) Shoppers & Vendors at East Pasar Tradisional
+    // f) Bustling Shoppers along Gang Pasar & Inside the Pasar Raya Tradisional Aisles!
     const pasarLoop = [
-      { x: 136, z: -48 },
-      { x: 148, z: -48 },
-      { x: 148, z: -24 },
-      { x: 136, z: -24 },
+      { x: 139.8, z: -64 },
+      { x: 145.2, z: -64 },
+      { x: 145.2, z: -34 },
+      { x: 139.8, z: -34 },
     ];
-    addLoopPedestrian(pasarLoop, 0, 0.25, 'warga', 54, false);
-    addLoopPedestrian(pasarLoop, 2, 0.65, 'pekerja_batik', 55, true);
+    addLoopPedestrian(pasarLoop, 0, 0.2, 'warga', 54, false);
+    addLoopPedestrian(pasarLoop, 2, 0.6, 'pekerja_batik', 55, true);
+    addLoopPedestrian(pasarLoop, 1, 0.45, 'santri', 57, false);
 
-    // 3. Sitting NPCs at Park Benches, Warungs, Pos Kamling, TPS 04, School Courtyard & River Deck
+    // Interior Market Hall Promenade Loop (walking through the central aisle & cross aisle of Pasar Raya!)
+    const pasarInteriorLoop = [
+      { x: 146.2, z: -50.0 },
+      { x: 160.2, z: -50.0 },
+      { x: 160.2, z: -61.5 },
+      { x: 160.2, z: -38.5 },
+    ];
+    addLoopPedestrian(pasarInteriorLoop, 0, 0.35, 'warga', 58, false);
+    addLoopPedestrian(pasarInteriorLoop, 2, 0.55, 'pekerja_batik', 59, true);
+
+    // 3. Sitting NPCs at Park Benches, Warungs, Pos Kamling, TPS 04, Pasar Raya, School Courtyard & River Deck
     const sittingConfigs: {
       shirt: number;
       pants: number;
@@ -2369,10 +2635,13 @@ export class CityEngine {
       // Pos Kamling Bale-Bale (Warga Ronda Santai di Gardu)
       { shirt: 0x0d9488, pants: 0x422006, archetype: 'warga', x: -147.5, y: 0.45, z: -36.5, heading: 0 },
       // Warkop Mbah Darmo (Warga Ngopi di Bangku Kayu)
-      { shirt: 0xdc2626, pants: 0x1e293b, archetype: 'warga', x: -136.2, y: 0.45, z: -14.0, heading: Math.PI / 2 },
+      { shirt: 0xdc2626, pants: 0x1e293b, archetype: 'warga', x: -135.4, y: 0.45, z: -9.0, heading: Math.PI / 2 },
       // TPS 04 Kampung Nusantara (Warga duduk antre memilih di kursi plastik TPS)
-      { shirt: 0x2563eb, pants: 0x1e293b, archetype: 'warga', x: -136.2, y: 0.38, z: -60.8, heading: -Math.PI / 2 },
-      { shirt: 0xd97706, pants: 0x334155, archetype: 'pekerja_batik', x: -136.2, y: 0.38, z: -59.85, heading: -Math.PI / 2 },
+      { shirt: 0x2563eb, pants: 0x1e293b, archetype: 'warga', x: -135.9, y: 0.38, z: -54.8, heading: -Math.PI / 2 },
+      { shirt: 0xd97706, pants: 0x334155, archetype: 'pekerja_batik', x: -135.9, y: 0.38, z: -53.85, heading: -Math.PI / 2 },
+      // Pasar Raya Tradisional — Warung Jajan Pasar & Dawet Ayu Bench + Warung Bakar Haji Rozak Bench
+      { shirt: 0x16a34a, pants: 0x1e293b, archetype: 'warga', x: 149.1, y: 0.45, z: -59.2, heading: Math.PI / 2 },
+      { shirt: 0xe11d48, pants: 0x334155, archetype: 'pekerja_batik', x: 136.5, y: 0.45, z: -49.6, heading: -Math.PI / 2 },
       // SMA Negeri 1 Kantin Courtyard Bench
       { shirt: 0xf1f5f9, pants: 0x64748b, archetype: 'pelajar_sma', x: 28.5, y: 0.45, z: 72.8, heading: Math.PI / 2 },
       { shirt: 0xf1f5f9, pants: 0x64748b, archetype: 'pelajar_sma', x: 31.5, y: 0.45, z: 72.8, heading: -Math.PI / 2 },
@@ -2416,20 +2685,30 @@ export class CityEngine {
       { type: 'hutan', x: -90.0, z: 70.5, heading: Math.PI },
       // 10. Pos Kamling & Gardu Ronda RT 03 (Petugas Ronda Sarung & Senter)
       { type: 'pos_kamling', x: -148.0, z: -35.0, heading: 0 },
-      // 11. Kios Pasar Tradisional Rakyat (Pedagang bertopi caping anyaman bambu)
-      { type: 'pasar', x: 140.0, z: -26.5, heading: 0 },
+      // 11A. Pasar Raya Tradisional — Bu Siti (Penjual Jajan Pasar, Es Dawet Ayu & Nasi Rames)
+      { type: 'pasar', x: 147.8, z: -55.5, heading: -Math.PI / 2 },
+      // 11B. Pasar Raya Tradisional — Bu Rahayu (Penjual Buah Tropis, Sayur & Jamu Segar)
+      { type: 'pasar_buah', x: 147.8, z: -41.5, heading: -Math.PI / 2 },
+      // 11C. Pasar Raya Tradisional — Pak Jagal Komar (Pedagang Los Daging Sapi & Ayam Potong)
+      { type: 'pasar_daging', x: 162.2, z: -57.2, heading: -Math.PI / 2 },
+      // 11D. Pasar Raya Tradisional — Bang Bahri (Pedagang Los Ikan Laut & Hasil Tambak)
+      { type: 'pasar_ikan', x: 162.2, z: -42.8, heading: -Math.PI / 2 },
+      // 11E. Pasar Raya Tradisional — Mbok Sari (Pedagang Los Bumbu Rempah, Tempe Tahu & Jamu)
+      { type: 'pasar_bumbu', x: 164.8, z: -50.0, heading: -Math.PI / 2 },
+      // 11F. Kios Pasar Barat Blok B — Pak Haji Rozak (Pedagang Ikan Bakar, Sate & Batik Pasar)
+      { type: 'pasar_pakaian', x: 136.6, z: -48.5, heading: Math.PI / 2 },
       // 12. Toko Kelontong Madura 24 Jam (Penjaga toko sarung & peci hitam)
-      { type: 'madura', x: -148.5, z: 28.5, heading: Math.PI / 2 },
+      { type: 'madura', x: -147.8, z: 32.0, heading: Math.PI / 2 },
       // 13. Minimarket Alfamaret Point (Kasir seragam Alfamaret merah kuning)
       { type: 'alfamaret', x: 32.5, z: -32.8, heading: Math.PI },
       // 14. Toko Sembako Bu Tejo (Penjaga toko kelontong sembako)
-      { type: 'toko_sembako', x: -137.2, z: -28.5, heading: -Math.PI / 2 },
+      { type: 'toko_sembako', x: -136.4, z: -20.5, heading: -Math.PI / 2 },
       // 15. Warkop Mbah Darmo (Peracik kopi tubruk & gorengan)
-      { type: 'warkop', x: -137.0, z: -14.0, heading: -Math.PI / 2 },
+      { type: 'warkop', x: -136.2, z: -9.0, heading: -Math.PI / 2 },
       // 16. Kios Bunga Ziarah & Penjaga TPU Kamboja Nusantara
       { type: 'penjaga_makam', x: -148.5, z: 74.8, heading: Math.PI / 2 },
       // 17. Petugas KPPS TPS 04 Kampung Nusantara (Meja Tinta Ungu & Surat Suara)
-      { type: 'petugas_tps', x: -136.8, z: -63.8, heading: -Math.PI / 2 },
+      { type: 'petugas_tps', x: -136.5, z: -57.8, heading: -Math.PI / 2 },
     ];
 
     for (const cfg of vendorConfigs) {
@@ -2445,6 +2724,249 @@ export class CityEngine {
         greetTimer: 0,
       });
     }
+  }
+
+  private spawnAnimals() {
+    // 1. WALKING CATS (Kucing Kampung Nusantara: Kucing Oyen, Calico Belang Tiga, Hitam Putih, Abu)
+    const catRoutes: {
+      coat: KucingCoatType;
+      speed: number;
+      waypoints: { x: number; z: number }[];
+    }[] = [
+      // Kucing Oyen 1 — Patrolling right outside Player's Safehouse (Rumah Pribadi) & Blok M sidewalk!
+      {
+        coat: 'oyen',
+        speed: 1.55,
+        waypoints: [
+          { x: -10.5, z: 20.5 },
+          { x: -8.6, z: 26.5 },
+          { x: -8.6, z: 14.5 },
+          { x: -11.5, z: 16.5 },
+        ],
+      },
+      // Kucing Calico — Lounging & strolling around Player's Safehouse front yard & Warung Pecel Lele
+      {
+        coat: 'calico',
+        speed: 1.35,
+        waypoints: [
+          { x: -13.5, z: 28.5 },
+          { x: -24.5, z: 12.5 },
+          { x: -34.5, z: 10.5 },
+          { x: -26.0, z: 18.0 },
+        ],
+      },
+      // Kucing Oyen 2 — Warung Pecel Lele Lamongan Cak Har (waiting for fried catfish scraps!)
+      {
+        coat: 'oyen',
+        speed: 1.45,
+        waypoints: [
+          { x: -29.0, z: 9.0 },
+          { x: -35.5, z: 9.0 },
+          { x: -35.5, z: 15.5 },
+          { x: -29.0, z: 15.5 },
+        ],
+      },
+      // Kucing Hitam Putih — Warung Bakso Solo Mas Joko sidewalk
+      {
+        coat: 'hitam_putih',
+        speed: 1.5,
+        waypoints: [
+          { x: 28.5, z: -9.0 },
+          { x: 36.0, z: -9.0 },
+          { x: 36.0, z: -15.5 },
+          { x: 28.5, z: -15.5 },
+        ],
+      },
+      // Kucing Abu — Minimarket Indoalfa 24 Jam terrace (sleeping & walking near AC outdoor unit)
+      {
+        coat: 'abu',
+        speed: 1.3,
+        waypoints: [
+          { x: -8.5, z: -28.0 },
+          { x: -8.5, z: -40.0 },
+          { x: -12.5, z: -40.0 },
+          { x: -12.5, z: -28.0 },
+        ],
+      },
+      // Kucing Oyen 3 — West Kampung Gang Utama (Pos Kamling, Toko Sembako & Warkop Mbah Darmo)
+      {
+        coat: 'oyen',
+        speed: 1.6,
+        waypoints: [
+          { x: -139.0, z: -32.0 },
+          { x: -139.0, z: -6.0 },
+          { x: -144.8, z: -6.0 },
+          { x: -144.8, z: -32.0 },
+        ],
+      },
+      // Kucing Calico 2 — West Kampung Warung Madura 24 Jam & Gang Mawar
+      {
+        coat: 'calico',
+        speed: 1.45,
+        waypoints: [
+          { x: -144.8, z: 22.0 },
+          { x: -144.8, z: 38.0 },
+          { x: -139.2, z: 38.0 },
+          { x: -139.2, z: 22.0 },
+        ],
+      },
+      // Kucing Hitam Putih 2 — Taman Kota Nusantara jogging track & Gazebo Joglo
+      {
+        coat: 'hitam_putih',
+        speed: 1.5,
+        waypoints: [
+          { x: -24.0, z: 74.0 },
+          { x: -36.0, z: 74.0 },
+          { x: -36.0, z: 86.0 },
+          { x: -24.0, z: 86.0 },
+        ],
+      },
+      // Kucing Oyen 4 — Kantin SMA Negeri 1 Nusantara courtyard
+      {
+        coat: 'oyen',
+        speed: 1.5,
+        waypoints: [
+          { x: 25.0, z: 71.0 },
+          { x: 35.0, z: 71.0 },
+          { x: 35.0, z: 77.0 },
+          { x: 25.0, z: 77.0 },
+        ],
+      },
+      // Kucing Abu 2 — Pasar Tradisional Rakyat (East District fish & vegetable stalls)
+      {
+        coat: 'abu',
+        speed: 1.65,
+        waypoints: [
+          { x: 145.5, z: -58.0 },
+          { x: 145.5, z: -38.0 },
+          { x: 140.2, z: -38.0 },
+          { x: 140.2, z: -58.0 },
+        ],
+      },
+      // Kucing Calico 3 — Taman Tugu Monas culinary plaza
+      {
+        coat: 'calico',
+        speed: 1.4,
+        waypoints: [
+          { x: -84.0, z: -12.0 },
+          { x: -96.0, z: -12.0 },
+          { x: -96.0, z: -20.0 },
+          { x: -84.0, z: -20.0 },
+        ],
+      },
+      // Kucing Oyen 5 — Taman Tugu Surabaya plaza
+      {
+        coat: 'oyen',
+        speed: 1.45,
+        waypoints: [
+          { x: 84.0, z: 12.0 },
+          { x: 96.0, z: 12.0 },
+          { x: 96.0, z: 20.0 },
+          { x: 84.0, z: 20.0 },
+        ],
+      },
+      // Kucing Hitam Putih 3 — Masjid Agung courtyard & sidewalk
+      {
+        coat: 'hitam_putih',
+        speed: 1.35,
+        waypoints: [
+          { x: 18.0, z: -68.5 },
+          { x: 42.0, z: -68.5 },
+          { x: 42.0, z: -74.0 },
+          { x: 18.0, z: -74.0 },
+        ],
+      },
+      // Kucing Abu 3 — Warung Tepi Sungai & Hutan Pinus
+      {
+        coat: 'abu',
+        speed: 1.4,
+        waypoints: [
+          { x: -84.0, z: 70.0 },
+          { x: -95.0, z: 70.0 },
+          { x: -95.0, z: 76.0 },
+          { x: -84.0, z: 76.0 },
+        ],
+      },
+    ];
+
+    catRoutes.forEach((cfg, idx) => {
+      const mesh = createKucingKampung(cfg.coat);
+      const p0 = cfg.waypoints[0];
+      const p1 = cfg.waypoints[1];
+      mesh.position.set(p0.x, 0, p0.z);
+      const heading = Math.atan2(p1.x - p0.x, p1.z - p0.z);
+      mesh.rotation.y = heading;
+      this.scene.add(mesh);
+
+      this.cats.push({
+        mesh,
+        coat: cfg.coat,
+        heading,
+        speed: cfg.speed,
+        walkCycle: idx * 1.7,
+        waypoints: cfg.waypoints,
+        waypointIdx: 1,
+        state: 'walking',
+        timer: (idx % 4) * 2.2,
+        duration: 10 + (idx % 5) * 3.0,
+      });
+    });
+
+    // 2. FLYING BIRDS (Burung Merpati, Burung Gereja & Elang Bondol di Langit Kota Nusantara)
+    const birdFlockCenters: {
+      cx: number;
+      cz: number;
+      baseY: number;
+      rx: number;
+      rz: number;
+      count: number;
+      variant: BurungVariant;
+      speed: number;
+      figureEight: boolean;
+    }[] = [
+      // Flock 1: Above Player's Safehouse (Blok M) & Central Intersection (visible immediately upon exiting house!)
+      { cx: -12, cz: 22, baseY: 13.5, rx: 18, rz: 14, count: 5, variant: 'merpati', speed: 0.55, figureEight: true },
+      // Flock 2: Central Simpang Raya & Bundaran Air Mancur
+      { cx: 0, cz: 0, baseY: 16.0, rx: 26, rz: 22, count: 5, variant: 'gereja', speed: 0.62, figureEight: false },
+      // Flock 3: Taman Tugu Monas soaring pigeons & Elang Bondol
+      { cx: -90, cz: -30, baseY: 21.0, rx: 24, rz: 20, count: 4, variant: 'merpati', speed: 0.48, figureEight: false },
+      { cx: -90, cz: -30, baseY: 28.0, rx: 30, rz: 26, count: 2, variant: 'elang', speed: 0.38, figureEight: true },
+      // Flock 4: Taman Kota Nusantara & Sekolah SMAN 1
+      { cx: 0, cz: 85, baseY: 15.0, rx: 28, rz: 18, count: 4, variant: 'gereja', speed: 0.58, figureEight: true },
+      // Flock 5: West Kampung & Pos Kamling rooftops
+      { cx: -142, cz: -15, baseY: 14.0, rx: 20, rz: 28, count: 4, variant: 'merpati', speed: 0.52, figureEight: false },
+      // Flock 6: East Pasar Tradisional & Taman Tugu Surabaya
+      { cx: 115, cz: -10, baseY: 17.5, rx: 26, rz: 24, count: 4, variant: 'merpati', speed: 0.5, figureEight: true },
+      // Flock 7: Hutan Wisata & Sungai Alami eagles
+      { cx: -90, cz: 90, baseY: 24.0, rx: 25, rz: 22, count: 2, variant: 'elang', speed: 0.42, figureEight: false },
+    ];
+
+    birdFlockCenters.forEach((flock, fIdx) => {
+      for (let b = 0; b < flock.count; b++) {
+        const mesh = createBurungTerbang(flock.variant);
+        const angle = (b / flock.count) * Math.PI * 2 + fIdx * 0.7;
+        const bx = flock.cx + Math.cos(angle) * flock.rx;
+        const bz = flock.cz + Math.sin(angle) * flock.rz;
+        const by = flock.baseY + (b % 3) * 1.4;
+        mesh.position.set(bx, by, bz);
+        this.scene.add(mesh);
+
+        this.birds.push({
+          mesh,
+          variant: flock.variant,
+          centerX: flock.cx + (b - flock.count * 0.5) * 2.2,
+          centerZ: flock.cz + ((b % 2) - 0.5) * 2.2,
+          baseY: by,
+          radiusX: flock.rx + (b % 3) * 2.5,
+          radiusZ: flock.rz + ((b + 1) % 3) * 2.5,
+          angle,
+          angularSpeed: flock.speed * (0.92 + (b % 3) * 0.08),
+          flapPhase: b * 1.3 + fIdx * 0.9,
+          flapSpeed: flock.variant === 'elang' ? 6.5 : flock.variant === 'merpati' ? 11.5 : 14.0,
+          figureEight: flock.figureEight,
+        });
+      }
+    });
   }
 
   private setupMissionVisuals() {
@@ -3184,7 +3706,7 @@ export class CityEngine {
       if (nextPhase !== this.timeOfDay) {
         this.timeOfDay = nextPhase;
         this.applyAtmosphere();
-      } else {
+      } else if (this.frameCounter % 3 === 0) {
         this.updateCelestialOrbit();
       }
     }
@@ -3348,6 +3870,12 @@ export class CityEngine {
       this.playerMesh.rotation.set(0, targetHeading, 0);
     }
     this.cameraOrbitOffset = 0;
+    this.updateStaticCulling(x, z);
+    this.keyLightTargetObj.position.set(x, 0, z);
+    this.keyLightTargetObj.updateMatrixWorld();
+    if (!this.isSoftwareGl) {
+      this.renderer.shadowMap.needsUpdate = true;
+    }
     this.showNotification(`Pindah ke ${label}`, 'Tiba di lokasi tujuan.', 'info');
     this.broadcastHud(true);
   }
@@ -3520,6 +4048,8 @@ export class CityEngine {
     }
   }
 
+  private playerMoveBlend = 0;
+
   private resetPlayerLimbPosture() {
     if (!this.playerMesh) return;
     this.playerMesh.rotation.x = 0;
@@ -3528,8 +4058,19 @@ export class CityEngine {
     if (limbs) {
       limbs.leftLeg.rotation.set(0, 0, 0);
       limbs.rightLeg.rotation.set(0, 0, 0);
+      if (limbs.leftKnee) limbs.leftKnee.rotation.set(0, 0, 0);
+      if (limbs.rightKnee) limbs.rightKnee.rotation.set(0, 0, 0);
       limbs.leftArm.rotation.set(0, 0, 0);
       limbs.rightArm.rotation.set(0, 0, 0);
+      if (limbs.leftElbow) limbs.leftElbow.rotation.set(0, 0, 0);
+      if (limbs.rightElbow) limbs.rightElbow.rotation.set(0, 0, 0);
+      if (limbs.upperBodyGroup) limbs.upperBodyGroup.rotation.set(0, 0, 0);
+      if (limbs.pelvisGroup) limbs.pelvisGroup.rotation.set(0, 0, 0);
+      if (limbs.bodyRoot) {
+        limbs.bodyRoot.position.set(0, 0, 0);
+        limbs.bodyRoot.rotation.set(0, 0, 0);
+      }
+      if (limbs.headGroup) limbs.headGroup.rotation.set(0, 0, 0);
     }
   }
 
@@ -3566,33 +4107,62 @@ export class CityEngine {
         this.resetPlayerLimbPosture();
         this.playerPos.y = 0.14;
       } else {
-        // Pose character limbs for Sitting, Eating, or Sleeping!
+        // Pose character limbs with natural knee/elbow bends for Sitting, Eating, or Sleeping!
         this.playerMesh.position.copy(this.playerPos);
         const limbs = this.playerMesh.userData.limbs;
+        const tNow = performance.now() * 0.001;
         if (this.playerHomeState === 'sleeping') {
           this.playerMesh.rotation.set(-Math.PI / 2, 0, -Math.PI / 2);
           if (limbs) {
-            limbs.leftLeg.rotation.x = 0;
-            limbs.rightLeg.rotation.x = 0;
-            limbs.leftArm.rotation.x = -0.2;
-            limbs.rightArm.rotation.x = -0.2;
+            if (limbs.bodyRoot) limbs.bodyRoot.position.set(0, 0, 0);
+            limbs.leftLeg.rotation.x = 0.05;
+            limbs.rightLeg.rotation.x = -0.05;
+            if (limbs.leftKnee) limbs.leftKnee.rotation.x = 0.12;
+            if (limbs.rightKnee) limbs.rightKnee.rotation.x = 0.18;
+            limbs.leftArm.rotation.set(-0.2, 0, 0.15);
+            limbs.rightArm.rotation.set(-0.25, 0, -0.15);
+            if (limbs.leftElbow) limbs.leftElbow.rotation.x = -0.55;
+            if (limbs.rightElbow) limbs.rightElbow.rotation.x = -0.65;
+            if (limbs.upperBodyGroup) {
+              limbs.upperBodyGroup.rotation.set(Math.sin(tNow * 1.8) * 0.02, 0, 0);
+            }
           }
         } else if (this.playerHomeState === 'sitting') {
           this.playerMesh.rotation.set(0, this.playerHeading, 0);
           if (limbs) {
-            limbs.leftLeg.rotation.x = -Math.PI / 2.2;
-            limbs.rightLeg.rotation.x = -Math.PI / 2.2;
-            limbs.leftArm.rotation.x = -0.45;
-            limbs.rightArm.rotation.x = -0.45;
+            if (limbs.bodyRoot) limbs.bodyRoot.position.set(0, -0.22, 0);
+            if (limbs.upperBodyGroup) limbs.upperBodyGroup.rotation.set(-0.08, 0, 0);
+            limbs.leftLeg.rotation.x = -Math.PI * 0.46;
+            limbs.rightLeg.rotation.x = -Math.PI * 0.46;
+            if (limbs.leftKnee) limbs.leftKnee.rotation.x = Math.PI * 0.44;
+            if (limbs.rightKnee) limbs.rightKnee.rotation.x = Math.PI * 0.44;
+            limbs.leftArm.rotation.set(-0.35, 0, 0.12);
+            limbs.rightArm.rotation.set(-0.35, 0, -0.12);
+            if (limbs.leftElbow) limbs.leftElbow.rotation.x = -0.65;
+            if (limbs.rightElbow) limbs.rightElbow.rotation.x = -0.65;
+            if (limbs.headGroup) {
+              limbs.headGroup.rotation.y = Math.sin(tNow * 1.1) * 0.18;
+            }
           }
         } else if (this.playerHomeState === 'eating') {
           this.playerMesh.rotation.set(0, this.playerHeading, 0);
           if (limbs) {
-            limbs.leftLeg.rotation.x = -Math.PI / 2.2;
-            limbs.rightLeg.rotation.x = -Math.PI / 2.2;
-            limbs.leftArm.rotation.x = -0.6;
-            limbs.rightArm.rotation.x =
-              -0.95 + Math.sin(performance.now() * 0.008) * 0.35;
+            if (limbs.bodyRoot) limbs.bodyRoot.position.set(0, -0.22, 0);
+            if (limbs.upperBodyGroup) limbs.upperBodyGroup.rotation.set(0.1, 0, 0);
+            limbs.leftLeg.rotation.x = -Math.PI * 0.46;
+            limbs.rightLeg.rotation.x = -Math.PI * 0.46;
+            if (limbs.leftKnee) limbs.leftKnee.rotation.x = Math.PI * 0.44;
+            if (limbs.rightKnee) limbs.rightKnee.rotation.x = Math.PI * 0.44;
+            limbs.leftArm.rotation.set(-0.55, 0, 0.15);
+            if (limbs.leftElbow) limbs.leftElbow.rotation.x = -0.75;
+            const eatWave = Math.sin(tNow * 6.5);
+            limbs.rightArm.rotation.set(-0.75 + eatWave * 0.25, -0.15, -0.1);
+            if (limbs.rightElbow) {
+              limbs.rightElbow.rotation.x = -1.05 + eatWave * 0.35;
+            }
+            if (limbs.headGroup) {
+              limbs.headGroup.rotation.x = 0.15 + Math.sin(tNow * 6.5) * 0.06;
+            }
           }
         }
         return;
@@ -3605,12 +4175,15 @@ export class CityEngine {
       this.virtualInput.sprint;
     const moveSpeed = isSprinting ? 11.5 : 7.2;
 
-    if (Math.abs(turnInput) > 0.05) {
-      this.playerHeading += THREE.MathUtils.clamp(turnInput, -1, 1) * 3.0 * dt;
+    const clampedTurn = Math.abs(turnInput) > 0.05 ? THREE.MathUtils.clamp(turnInput, -1, 1) : 0;
+    if (clampedTurn !== 0) {
+      this.playerHeading += clampedTurn * 3.1 * dt;
     }
 
-    if (Math.abs(forwardInput) > 0.05) {
-      const clampedFwd = THREE.MathUtils.clamp(forwardInput, -1, 1);
+    const isMoving = Math.abs(forwardInput) > 0.05;
+    const clampedFwd = isMoving ? THREE.MathUtils.clamp(forwardInput, -1, 1) : 0;
+
+    if (isMoving) {
       const step = clampedFwd * moveSpeed * dt;
       const nextX = this.playerPos.x + Math.sin(this.playerHeading) * step;
       const nextZ = this.playerPos.z + Math.cos(this.playerHeading) * step;
@@ -3622,11 +4195,13 @@ export class CityEngine {
         this.playerPos.z = nextZ;
       }
 
+      const dirSign = clampedFwd >= 0 ? 1 : -1;
       this.playerWalkCycle +=
-        dt * (isSprinting ? 14 : 9) * Math.max(0.45, Math.abs(clampedFwd));
-    } else {
-      this.playerWalkCycle = 0;
+        dt * (isSprinting ? 13.5 : 9.2) * Math.max(0.45, Math.abs(clampedFwd)) * dirSign;
     }
+
+    const targetBlend = isMoving ? (isSprinting ? 1.35 : 0.88) * Math.abs(clampedFwd) : 0;
+    this.playerMoveBlend = THREE.MathUtils.damp(this.playerMoveBlend, targetBlend, 10.0, dt);
 
     const insideNow = this.isPlayerInsideHome(this.playerPos.x, this.playerPos.z);
     const floorY = insideNow ? 0.14 : 0;
@@ -3644,6 +4219,8 @@ export class CityEngine {
     } else {
       this.playerPos.y = floorY;
     }
+
+    const isInAir = this.playerPos.y > floorY + 0.06;
 
     // Check if player just walked out or in through the front door of their house!
     if (this.wasInsideHome !== insideNow) {
@@ -3681,18 +4258,196 @@ export class CityEngine {
     this.playerMesh.position.copy(this.playerPos);
     this.playerMesh.rotation.set(0, this.playerHeading, 0);
 
+    // =========================================================================
+    // FLUID MULTI-JOINT KINEMATICS (Natural Gait, Knee/Elbow Flexion & Idle Breathing)
+    // =========================================================================
     const limbs = this.playerMesh.userData.limbs;
     if (limbs) {
-      const swing = Math.sin(this.playerWalkCycle) * 0.65;
-      limbs.leftLeg.rotation.x = swing;
-      limbs.rightLeg.rotation.x = -swing;
-      limbs.leftArm.rotation.x = -swing * 0.8;
+      const idleTime = this.clock.getElapsedTime();
+      const blend = Math.min(1.0, this.playerMoveBlend);
+      const sprintFactor = Math.max(0, this.playerMoveBlend - 0.88) / 0.47;
+      const cycle = this.playerWalkCycle;
+
+      // 1. Vertical Stride Bounce & Turn Banking on bodyRoot
+      if (limbs.bodyRoot) {
+        const strideBounce = isInAir
+          ? 0
+          : Math.abs(Math.sin(cycle)) * (0.045 + sprintFactor * 0.04) * blend;
+        const idleBreathY = (1 - blend) * Math.sin(idleTime * 2.4) * 0.012;
+        limbs.bodyRoot.position.y = THREE.MathUtils.damp(
+          limbs.bodyRoot.position.y,
+          strideBounce + idleBreathY,
+          14,
+          dt
+        );
+
+        // Subtle lean into turns when running/walking
+        const targetBankZ = -clampedTurn * (0.06 + sprintFactor * 0.07) * blend;
+        limbs.bodyRoot.rotation.z = THREE.MathUtils.damp(
+          limbs.bodyRoot.rotation.z,
+          targetBankZ,
+          8,
+          dt
+        );
+      }
+
+      // 2. Spine / Upper Body Lean & Counter-Rotation Twist
+      if (limbs.upperBodyGroup) {
+        const forwardLean =
+          clampedFwd >= 0
+            ? (0.08 + sprintFactor * 0.14) * blend
+            : -0.06 * blend;
+        const idleBreathPitch = (1 - blend) * Math.sin(idleTime * 2.4) * 0.022;
+        limbs.upperBodyGroup.rotation.x = THREE.MathUtils.damp(
+          limbs.upperBodyGroup.rotation.x,
+          forwardLean + idleBreathPitch,
+          10,
+          dt
+        );
+
+        const torsoTwistY = -Math.sin(cycle) * (0.11 + sprintFactor * 0.08) * blend;
+        limbs.upperBodyGroup.rotation.y = THREE.MathUtils.damp(
+          limbs.upperBodyGroup.rotation.y,
+          torsoTwistY,
+          12,
+          dt
+        );
+      }
+
+      if (limbs.pelvisGroup) {
+        const hipTwistY = Math.sin(cycle) * 0.08 * blend;
+        const hipRollZ = Math.cos(cycle) * 0.035 * blend;
+        limbs.pelvisGroup.rotation.y = THREE.MathUtils.damp(
+          limbs.pelvisGroup.rotation.y,
+          hipTwistY,
+          12,
+          dt
+        );
+        limbs.pelvisGroup.rotation.z = THREE.MathUtils.damp(
+          limbs.pelvisGroup.rotation.z,
+          hipRollZ,
+          12,
+          dt
+        );
+      }
+
+      // 3. Two-Segment Leg & Knee Gait Kinematics
+      const thighAmp = 0.56 + sprintFactor * 0.32;
+      const kneeAmp = 0.65 + sprintFactor * 0.45;
+
+      let leftThighTarget = Math.sin(cycle) * thighAmp * blend;
+      let rightThighTarget = -Math.sin(cycle) * thighAmp * blend;
+
+      // Knee bends positively (backward) when leg lifts forward/upward during stride
+      let leftKneeTarget =
+        Math.max(0, -Math.cos(cycle - 0.35)) * kneeAmp * blend + 0.05 * (1 - blend);
+      let rightKneeTarget =
+        Math.max(0, Math.cos(cycle - 0.35)) * kneeAmp * blend + 0.05 * (1 - blend);
+
+      if (isInAir) {
+        leftThighTarget = -0.42;
+        rightThighTarget = 0.22;
+        leftKneeTarget = 0.68;
+        rightKneeTarget = 0.45;
+      }
+
+      limbs.leftLeg.rotation.x = THREE.MathUtils.damp(
+        limbs.leftLeg.rotation.x,
+        leftThighTarget,
+        15,
+        dt
+      );
+      limbs.rightLeg.rotation.x = THREE.MathUtils.damp(
+        limbs.rightLeg.rotation.x,
+        rightThighTarget,
+        15,
+        dt
+      );
+      if (limbs.leftKnee) {
+        limbs.leftKnee.rotation.x = THREE.MathUtils.damp(
+          limbs.leftKnee.rotation.x,
+          leftKneeTarget,
+          16,
+          dt
+        );
+      }
+      if (limbs.rightKnee) {
+        limbs.rightKnee.rotation.x = THREE.MathUtils.damp(
+          limbs.rightKnee.rotation.x,
+          rightKneeTarget,
+          16,
+          dt
+        );
+      }
+
+      // 4. Two-Segment Arm & Elbow Swing + Idle / Jump / Action Pose
+      const armAmp = 0.48 + sprintFactor * 0.34;
+      const baseElbowFlex = -0.22 - blend * (0.28 + sprintFactor * 0.42);
+
+      let leftArmX = -Math.sin(cycle) * armAmp * blend + Math.sin(idleTime * 1.9) * 0.03 * (1 - blend);
+      let rightArmX = Math.sin(cycle) * armAmp * blend - Math.sin(idleTime * 1.9) * 0.03 * (1 - blend);
+      let leftElbowX =
+        baseElbowFlex - Math.max(0, Math.sin(cycle)) * 0.32 * blend;
+      let rightElbowX =
+        baseElbowFlex - Math.max(0, -Math.sin(cycle)) * 0.32 * blend;
+
+      let leftArmZ = 0.06 + (1 - blend) * 0.02;
+      let rightArmZ = -0.06 - (1 - blend) * 0.02;
+
+      if (isInAir) {
+        leftArmX = -0.55;
+        rightArmX = -0.45;
+        leftArmZ = 0.28;
+        rightArmZ = -0.28;
+        leftElbowX = -0.55;
+        rightElbowX = -0.55;
+      }
 
       if (this.playerPunchTimer > 0) {
         this.playerPunchTimer -= dt;
-        limbs.rightArm.rotation.x = -Math.PI * 0.55;
-      } else {
-        limbs.rightArm.rotation.x = swing * 0.8;
+        rightArmX = -Math.PI * 0.52;
+        rightElbowX = -0.15;
+      }
+
+      limbs.leftArm.rotation.x = THREE.MathUtils.damp(limbs.leftArm.rotation.x, leftArmX, 15, dt);
+      limbs.leftArm.rotation.z = THREE.MathUtils.damp(limbs.leftArm.rotation.z, leftArmZ, 10, dt);
+      limbs.rightArm.rotation.x = THREE.MathUtils.damp(limbs.rightArm.rotation.x, rightArmX, 15, dt);
+      limbs.rightArm.rotation.z = THREE.MathUtils.damp(limbs.rightArm.rotation.z, rightArmZ, 10, dt);
+
+      if (limbs.leftElbow) {
+        limbs.leftElbow.rotation.x = THREE.MathUtils.damp(
+          limbs.leftElbow.rotation.x,
+          leftElbowX,
+          15,
+          dt
+        );
+      }
+      if (limbs.rightElbow) {
+        limbs.rightElbow.rotation.x = THREE.MathUtils.damp(
+          limbs.rightElbow.rotation.x,
+          rightElbowX,
+          15,
+          dt
+        );
+      }
+
+      // 5. Expressive Head Look-Around & Turn Tracking
+      if (limbs.headGroup) {
+        const idleLookY = (1 - blend) * Math.sin(idleTime * 0.95) * 0.18;
+        const turnLookY = clampedTurn * 0.22 * blend;
+        const idleNodX = (1 - blend) * Math.cos(idleTime * 1.5) * 0.04;
+        limbs.headGroup.rotation.y = THREE.MathUtils.damp(
+          limbs.headGroup.rotation.y,
+          idleLookY + turnLookY,
+          8,
+          dt
+        );
+        limbs.headGroup.rotation.x = THREE.MathUtils.damp(
+          limbs.headGroup.rotation.x,
+          idleNodX - sprintFactor * 0.08,
+          8,
+          dt
+        );
       }
     }
   }
@@ -4144,9 +4899,13 @@ export class CityEngine {
         dt
       );
 
-      // Distance culling for AI vehicle details (skip wheels if far from camera)
+      // Distance culling for AI vehicles (hide mesh & skip wheel rotation if far from camera)
       const distToCamSq = (v.mesh.position.x - activePos.x) ** 2 + (v.mesh.position.z - activePos.z) ** 2;
-      if (distToCamSq < 130 * 130) {
+      const isVehVisible = distToCamSq < 132 * 132;
+      if (v.mesh.visible !== isVehVisible) {
+        v.mesh.visible = isVehVisible;
+      }
+      if (isVehVisible && distToCamSq < 85 * 85) {
         const wheels = v.mesh.userData.wheels as THREE.Object3D[] | undefined;
         if (wheels && v.speed > 0.2) {
           wheels.forEach((w) => {
@@ -4155,7 +4914,7 @@ export class CityEngine {
         }
       }
 
-      if (this.drivenVehicle) {
+      if (this.drivenVehicle && isVehVisible) {
         const distVeh = Math.hypot(
           v.mesh.position.x - this.drivenVehicle.mesh.position.x,
           v.mesh.position.z - this.drivenVehicle.mesh.position.z
@@ -4182,13 +4941,15 @@ export class CityEngine {
     for (let i = 0; i < this.pedestrians.length; i++) {
       const p = this.pedestrians[i];
       const distSq = (p.mesh.position.x - activePos.x) ** 2 + (p.mesh.position.z - activePos.z) ** 2;
-      const isVisible = distSq < 85 * 85;
-      p.mesh.visible = isVisible;
+      const isVisible = distSq < 68 * 68;
+      if (p.mesh.visible !== isVisible) {
+        p.mesh.visible = isVisible;
+      }
 
       const wp = p.waypoints[p.waypointIdx];
       const dx = wp.x - p.mesh.position.x;
       const dz = wp.z - p.mesh.position.z;
-      if (Math.hypot(dx, dz) < 1.0) {
+      if (dx * dx + dz * dz < 1.0) {
         p.waypointIdx = (p.waypointIdx + 1) % p.waypoints.length;
       }
 
@@ -4230,21 +4991,23 @@ export class CityEngine {
         }
       }
 
-      // 2) Avoid nearby pedestrians in path to pass smoothly without stopping
-      for (let j = 0; j < this.pedestrians.length; j++) {
-        if (i === j) continue;
-        const other = this.pedestrians[j];
-        const odx = other.mesh.position.x - p.mesh.position.x;
-        const odz = other.mesh.position.z - p.mesh.position.z;
-        const oDistSq = odx * odx + odz * odz;
-        if (oDistSq < 2.8 * 2.8 && oDistSq > 0.04) {
-          const oFwd = odx * fwdX + odz * fwdZ;
-          const oRight = odx * rightX + odz * rightZ;
-          if (oFwd > 0.15 && oFwd < 2.5 && Math.abs(oRight) < 1.3) {
-            const weight = 1.0 - oFwd / 2.5;
-            const dir = oRight >= 0 ? -1 : 1;
-            avoidDir += dir * weight;
-            maxAvoidWeight = Math.max(maxAvoidWeight, weight);
+      // 2) Avoid nearby pedestrians in path (only when close to camera < 36m)
+      if (distSq < 36 * 36) {
+        for (let j = 0; j < this.pedestrians.length; j++) {
+          if (i === j) continue;
+          const other = this.pedestrians[j];
+          const odx = other.mesh.position.x - p.mesh.position.x;
+          const odz = other.mesh.position.z - p.mesh.position.z;
+          const oDistSq = odx * odx + odz * odz;
+          if (oDistSq < 2.8 * 2.8 && oDistSq > 0.04) {
+            const oFwd = odx * fwdX + odz * fwdZ;
+            const oRight = odx * rightX + odz * rightZ;
+            if (oFwd > 0.15 && oFwd < 2.5 && Math.abs(oRight) < 1.3) {
+              const weight = 1.0 - oFwd / 2.5;
+              const dir = oRight >= 0 ? -1 : 1;
+              avoidDir += dir * weight;
+              maxAvoidWeight = Math.max(maxAvoidWeight, weight);
+            }
           }
         }
       }
@@ -4282,15 +5045,50 @@ export class CityEngine {
 
         p.mesh.rotation.y = p.heading;
 
-        // Fluid continuous walking limb swing animation
-        p.walkCycle += dt * (p.speed * 3.1);
+        // Fluid multi-joint walking kinematics (thighs, knees, arms, elbows, spine & bounce)
+        p.walkCycle += dt * (p.speed * 3.2);
         if (limbs) {
-          const swing = Math.sin(p.walkCycle) * 0.52;
-          limbs.leftLeg.rotation.x = swing;
-          limbs.rightLeg.rotation.x = -swing;
-          limbs.leftArm.rotation.x = -swing * 0.65;
-          limbs.rightArm.rotation.x = swing * 0.65;
-          limbs.head.rotation.set(0, 0, 0);
+          const phase = p.walkCycle;
+          const sinP = Math.sin(phase);
+          const cosP = Math.cos(phase);
+
+          // Thigh swing
+          limbs.leftLeg.rotation.x = sinP * 0.56;
+          limbs.rightLeg.rotation.x = -sinP * 0.56;
+
+          // Natural knee flexion when each leg swings forward/lifts
+          if (limbs.leftKnee && limbs.rightKnee) {
+            const leftBend = Math.max(0, -cosP + 0.25) * 0.68;
+            const rightBend = Math.max(0, cosP + 0.25) * 0.68;
+            limbs.leftKnee.rotation.x = leftBend;
+            limbs.rightKnee.rotation.x = rightBend;
+          }
+
+          // Upper arm counter-swing + subtle side clearance
+          limbs.leftArm.rotation.x = -sinP * 0.48;
+          limbs.rightArm.rotation.x = sinP * 0.48;
+          limbs.leftArm.rotation.z = 0.05 + Math.abs(sinP) * 0.03;
+          limbs.rightArm.rotation.z = -0.05 - Math.abs(sinP) * 0.03;
+
+          // Forearm elbow bend during swing
+          if (limbs.leftElbow && limbs.rightElbow) {
+            limbs.leftElbow.rotation.x = -0.22 - Math.max(0, -sinP) * 0.42;
+            limbs.rightElbow.rotation.x = -0.22 - Math.max(0, sinP) * 0.42;
+          }
+
+          // Spine forward walk lean + counter-twist + vertical stride bounce
+          if (limbs.upperBodyGroup) {
+            limbs.upperBodyGroup.rotation.x = 0.045 + Math.abs(sinP) * 0.025;
+            limbs.upperBodyGroup.rotation.y = -sinP * 0.095;
+            limbs.upperBodyGroup.rotation.z = cosP * 0.025;
+          }
+          if (limbs.bodyRoot) {
+            limbs.bodyRoot.position.y = Math.abs(sinP) * 0.028 - 0.008;
+          }
+
+          limbs.head.rotation.x = -0.02 + Math.abs(sinP) * 0.02;
+          limbs.head.rotation.y = sinP * 0.06;
+          limbs.head.rotation.z = 0;
           if (limbs.phone) limbs.phone.visible = false;
         }
 
@@ -4315,36 +5113,79 @@ export class CityEngine {
         p.idleTimer += dt;
 
         if (limbs) {
-          // Legs stand stably on sidewalk
+          // Legs & knees settle smoothly onto the sidewalk
           limbs.leftLeg.rotation.x = THREE.MathUtils.damp(limbs.leftLeg.rotation.x, 0, 8, dt);
           limbs.rightLeg.rotation.x = THREE.MathUtils.damp(limbs.rightLeg.rotation.x, 0, 8, dt);
+          if (limbs.leftKnee && limbs.rightKnee) {
+            limbs.leftKnee.rotation.x = THREE.MathUtils.damp(limbs.leftKnee.rotation.x, 0.03, 8, dt);
+            limbs.rightKnee.rotation.x = THREE.MathUtils.damp(limbs.rightKnee.rotation.x, 0.03, 8, dt);
+          }
+          if (limbs.bodyRoot) {
+            limbs.bodyRoot.position.y = THREE.MathUtils.damp(
+              limbs.bodyRoot.position.y,
+              Math.sin(p.idleTimer * 2.2) * 0.006,
+              6,
+              dt
+            );
+          }
+          if (limbs.upperBodyGroup) {
+            limbs.upperBodyGroup.rotation.x = THREE.MathUtils.damp(
+              limbs.upperBodyGroup.rotation.x,
+              Math.sin(p.idleTimer * 2.2) * 0.015,
+              6,
+              dt
+            );
+            limbs.upperBodyGroup.rotation.y = THREE.MathUtils.damp(
+              limbs.upperBodyGroup.rotation.y,
+              Math.sin(p.idleTimer * 1.1) * 0.05,
+              5,
+              dt
+            );
+            limbs.upperBodyGroup.rotation.z = THREE.MathUtils.damp(limbs.upperBodyGroup.rotation.z, 0, 6, dt);
+          }
 
           if (p.state === 'idle_waving') {
-            // Friendly Indonesian waving gesture with right hand ("Halo / Mari Mas!")
-            limbs.leftArm.rotation.x = THREE.MathUtils.damp(limbs.leftArm.rotation.x, 0, 6, dt);
-            limbs.leftArm.rotation.z = THREE.MathUtils.damp(limbs.leftArm.rotation.z, 0, 6, dt);
-            limbs.rightArm.rotation.x = -1.55 + Math.sin(p.idleTimer * 6.5) * 0.22;
-            limbs.rightArm.rotation.z = -0.52 + Math.cos(p.idleTimer * 6.5) * 0.25;
+            // Friendly Indonesian waving gesture with bent elbow ("Halo / Mari Mas!")
+            limbs.leftArm.rotation.x = THREE.MathUtils.damp(limbs.leftArm.rotation.x, 0.04, 6, dt);
+            limbs.leftArm.rotation.z = THREE.MathUtils.damp(limbs.leftArm.rotation.z, 0.06, 6, dt);
+            if (limbs.leftElbow) {
+              limbs.leftElbow.rotation.x = THREE.MathUtils.damp(limbs.leftElbow.rotation.x, -0.18, 6, dt);
+            }
+            limbs.rightArm.rotation.x = -1.15 + Math.sin(p.idleTimer * 6.2) * 0.16;
+            limbs.rightArm.rotation.z = -0.45 + Math.cos(p.idleTimer * 6.2) * 0.24;
+            if (limbs.rightElbow) {
+              limbs.rightElbow.rotation.x = -0.85 + Math.sin(p.idleTimer * 6.2) * 0.25;
+            }
             limbs.head.rotation.y = Math.sin(p.idleTimer * 2.4) * 0.22;
-            limbs.head.rotation.z = 0;
+            limbs.head.rotation.z = 0.05;
           } else if (p.state === 'idle_calling') {
-            // Holding smartphone up to ear, nodding while chatting
+            // Holding smartphone up to ear with articulated elbow bend, nodding while chatting
             if (limbs.phone) limbs.phone.visible = true;
-            limbs.rightArm.rotation.x = -2.15 + Math.sin(p.idleTimer * 1.6) * 0.05;
-            limbs.rightArm.rotation.z = -0.42;
-            limbs.leftArm.rotation.x = Math.sin(p.idleTimer * 2.2) * 0.16;
+            limbs.rightArm.rotation.x = -1.05 + Math.sin(p.idleTimer * 1.6) * 0.04;
+            limbs.rightArm.rotation.z = -0.32;
+            if (limbs.rightElbow) {
+              limbs.rightElbow.rotation.x = -1.25 + Math.sin(p.idleTimer * 2.0) * 0.05;
+            }
+            limbs.leftArm.rotation.x = Math.sin(p.idleTimer * 2.2) * 0.14;
             limbs.leftArm.rotation.z = 0.08;
-            limbs.head.rotation.z = -0.15; // Natural head tilt towards phone
+            if (limbs.leftElbow) {
+              limbs.leftElbow.rotation.x = -0.28 + Math.sin(p.idleTimer * 2.2) * 0.12;
+            }
+            limbs.head.rotation.z = -0.14; // Natural head tilt towards phone
             limbs.head.rotation.y = Math.sin(p.idleTimer * 1.8) * 0.12;
           } else if (p.state === 'idle_looking') {
-            // Standing calmly, looking left, right & center enjoying Indonesian city atmosphere
-            limbs.leftArm.rotation.x = THREE.MathUtils.damp(limbs.leftArm.rotation.x, 0, 6, dt);
-            limbs.leftArm.rotation.z = 0;
-            limbs.rightArm.rotation.x = THREE.MathUtils.damp(limbs.rightArm.rotation.x, 0, 6, dt);
-            limbs.rightArm.rotation.z = 0;
-            limbs.head.rotation.y = Math.sin(p.idleTimer * 1.6) * 0.65;
-            limbs.head.rotation.x = 0.06 + Math.cos(p.idleTimer * 1.1) * 0.04;
-            limbs.head.rotation.z = 0;
+            // Standing calmly with relaxed elbows, looking left, right & center
+            limbs.leftArm.rotation.x = THREE.MathUtils.damp(limbs.leftArm.rotation.x, 0.03, 6, dt);
+            limbs.leftArm.rotation.z = 0.06;
+            limbs.rightArm.rotation.x = THREE.MathUtils.damp(limbs.rightArm.rotation.x, -0.03, 6, dt);
+            limbs.rightArm.rotation.z = -0.06;
+            if (limbs.leftElbow && limbs.rightElbow) {
+              limbs.leftElbow.rotation.x = THREE.MathUtils.damp(limbs.leftElbow.rotation.x, -0.2, 6, dt);
+              limbs.rightElbow.rotation.x = THREE.MathUtils.damp(limbs.rightElbow.rotation.x, -0.2, 6, dt);
+            }
+            limbs.head.rotation.y = Math.sin(p.idleTimer * 1.6) * 0.62;
+            limbs.head.rotation.x = 0.04 + Math.cos(p.idleTimer * 1.1) * 0.04;
+            limbs.head.rotation.z = Math.sin(p.idleTimer * 0.8) * 0.04;
           }
         }
 
@@ -4355,6 +5196,8 @@ export class CityEngine {
           if (limbs) {
             limbs.rightArm.rotation.set(0, 0, 0);
             limbs.leftArm.rotation.set(0, 0, 0);
+            if (limbs.leftElbow) limbs.leftElbow.rotation.set(-0.18, 0, 0);
+            if (limbs.rightElbow) limbs.rightElbow.rotation.set(-0.18, 0, 0);
             limbs.head.rotation.set(0, 0, 0);
           }
           p.state = 'walking';
@@ -4383,7 +5226,7 @@ export class CityEngine {
       }
     }
 
-    // 3. Update Vendor NPCs (Interactive culinary & service shopkeepers)
+    // 3. Update Vendor NPCs (Interactive culinary & service shopkeepers with multi-joint elbows & torso)
     for (let k = 0; k < this.vendors.length; k++) {
       const v = this.vendors[k];
       const vdx = v.mesh.position.x - activePos.x;
@@ -4404,50 +5247,288 @@ export class CityEngine {
 
         v.armPhase += dt * 5.0;
 
+        if (vLimbs?.upperBodyGroup) {
+          vLimbs.upperBodyGroup.rotation.x = 0.04 + Math.sin(v.armPhase * 0.5) * 0.025;
+          vLimbs.upperBodyGroup.rotation.y = Math.sin(v.armPhase * 0.4) * 0.08;
+        }
+        if (vLimbs?.leftArm && vLimbs?.leftElbow) {
+          vLimbs.leftArm.rotation.x = -0.25 + Math.sin(v.armPhase * 0.5) * 0.08;
+          vLimbs.leftElbow.rotation.x = -0.45 + Math.cos(v.armPhase * 0.5) * 0.1;
+        }
+
         if (vLimbs?.rightArm) {
           if (v.type === 'pecel_lele') {
-            // Cak Har waves bamboo fan (kipas sate) energetically
-            vLimbs.rightArm.rotation.x = -1.1 + Math.sin(v.armPhase) * 0.38;
-            vLimbs.rightArm.rotation.z = -0.32 + Math.cos(v.armPhase) * 0.28;
+            // Cak Har waves bamboo fan (kipas sate) energetically from elbow & shoulder
+            vLimbs.rightArm.rotation.x = -0.65 + Math.sin(v.armPhase) * 0.25;
+            vLimbs.rightArm.rotation.z = -0.25 + Math.cos(v.armPhase) * 0.18;
+            if (vLimbs.rightElbow) {
+              vLimbs.rightElbow.rotation.x = -0.75 + Math.sin(v.armPhase * 1.2) * 0.35;
+            }
           } else if (v.type === 'bakso') {
             // Mas Solo scoops soup with ladle and invites customer
-            vLimbs.rightArm.rotation.x = -1.2 + Math.sin(v.armPhase * 0.8) * 0.32;
-            vLimbs.rightArm.rotation.z = -0.25;
+            vLimbs.rightArm.rotation.x = -0.72 + Math.sin(v.armPhase * 0.8) * 0.24;
+            vLimbs.rightArm.rotation.z = -0.22;
+            if (vLimbs.rightElbow) {
+              vLimbs.rightElbow.rotation.x = -0.68 + Math.cos(v.armPhase * 0.8) * 0.28;
+            }
           } else if (v.type === 'bengkel') {
             // Pak Slamet gestures with wrench
-            vLimbs.rightArm.rotation.x = -1.4 + Math.sin(v.armPhase * 0.7) * 0.25;
-            vLimbs.rightArm.rotation.z = -0.3;
+            vLimbs.rightArm.rotation.x = -0.85 + Math.sin(v.armPhase * 0.7) * 0.2;
+            vLimbs.rightArm.rotation.z = -0.25;
+            if (vLimbs.rightElbow) {
+              vLimbs.rightElbow.rotation.x = -0.72 + Math.sin(v.armPhase * 0.7) * 0.22;
+            }
+          } else if (v.type === 'pasar_daging') {
+            // Pak Jagal Komar chops meat on chopping block & waves cleaver to greet shopper
+            vLimbs.rightArm.rotation.x = -0.88 + Math.sin(v.armPhase * 1.1) * 0.28;
+            vLimbs.rightArm.rotation.z = -0.18;
+            if (vLimbs.rightElbow) {
+              vLimbs.rightElbow.rotation.x = -0.78 + Math.cos(v.armPhase * 1.1) * 0.32;
+            }
+          } else if (v.type === 'pasar_ikan' || v.type === 'pasar_buah' || v.type === 'pasar_bumbu') {
+            // Market vendors enthusiastically hold up fresh fish / fruit basket / jamu bottle
+            vLimbs.rightArm.rotation.x = -0.95 + Math.sin(v.armPhase * 0.9) * 0.22;
+            vLimbs.rightArm.rotation.z = -0.28 + Math.cos(v.armPhase * 0.9) * 0.16;
+            if (vLimbs.rightElbow) {
+              vLimbs.rightElbow.rotation.x = -0.85 + Math.sin(v.armPhase * 0.9) * 0.25;
+            }
           } else {
             // Welcoming friendly "Monggo pinarak / Silakan belanja!" hand wave
-            vLimbs.rightArm.rotation.x = -1.55 + Math.sin(v.armPhase) * 0.22;
-            vLimbs.rightArm.rotation.z = -0.5 + Math.cos(v.armPhase) * 0.25;
+            vLimbs.rightArm.rotation.x = -1.1 + Math.sin(v.armPhase) * 0.18;
+            vLimbs.rightArm.rotation.z = -0.42 + Math.cos(v.armPhase) * 0.22;
+            if (vLimbs.rightElbow) {
+              vLimbs.rightElbow.rotation.x = -0.82 + Math.sin(v.armPhase) * 0.24;
+            }
           }
         }
         if (vLimbs?.head) {
-          vLimbs.head.rotation.y = Math.sin(v.armPhase * 0.5) * 0.15;
+          vLimbs.head.rotation.y = Math.sin(v.armPhase * 0.5) * 0.16;
+          vLimbs.head.rotation.x = Math.sin(v.armPhase * 0.8) * 0.05;
         }
       } else {
         // Return smoothly to original stall facing
         v.mesh.rotation.y = THREE.MathUtils.damp(v.mesh.rotation.y, v.baseHeading, 3.2, dt);
         v.armPhase += dt * 1.8;
 
+        if (vLimbs?.upperBodyGroup) {
+          vLimbs.upperBodyGroup.rotation.x = THREE.MathUtils.damp(
+            vLimbs.upperBodyGroup.rotation.x,
+            Math.sin(v.armPhase) * 0.015,
+            4,
+            dt
+          );
+          vLimbs.upperBodyGroup.rotation.y = THREE.MathUtils.damp(
+            vLimbs.upperBodyGroup.rotation.y,
+            Math.cos(v.armPhase * 0.6) * 0.04,
+            4,
+            dt
+          );
+        }
+        if (vLimbs?.leftArm && vLimbs?.leftElbow) {
+          vLimbs.leftArm.rotation.x = THREE.MathUtils.damp(vLimbs.leftArm.rotation.x, -0.1, 4, dt);
+          vLimbs.leftElbow.rotation.x = THREE.MathUtils.damp(vLimbs.leftElbow.rotation.x, -0.28, 4, dt);
+        }
+
         if (vLimbs?.rightArm) {
           if (v.type === 'pecel_lele') {
             // Gentle idle fanning over grill
-            vLimbs.rightArm.rotation.x = -0.9 + Math.sin(v.armPhase) * 0.2;
-            vLimbs.rightArm.rotation.z = -0.25;
+            vLimbs.rightArm.rotation.x = -0.55 + Math.sin(v.armPhase) * 0.16;
+            vLimbs.rightArm.rotation.z = -0.2;
+            if (vLimbs.rightElbow) {
+              vLimbs.rightElbow.rotation.x = -0.65 + Math.cos(v.armPhase) * 0.22;
+            }
+          } else if (v.type === 'pasar_daging') {
+            // Gentle idle meat preparation motion at butcher block
+            vLimbs.rightArm.rotation.x = -0.52 + Math.sin(v.armPhase * 1.3) * 0.18;
+            vLimbs.rightArm.rotation.z = -0.12;
+            if (vLimbs.rightElbow) {
+              vLimbs.rightElbow.rotation.x = -0.68 + Math.cos(v.armPhase * 1.3) * 0.2;
+            }
+          } else if (v.type === 'pasar_ikan' || v.type === 'pasar_buah' || v.type === 'pasar_bumbu') {
+            // Tending market produce / fish ice bed / spices
+            vLimbs.rightArm.rotation.x = -0.45 + Math.sin(v.armPhase * 0.9) * 0.14;
+            vLimbs.rightArm.rotation.z = -0.15;
+            if (vLimbs.rightElbow) {
+              vLimbs.rightElbow.rotation.x = -0.6 + Math.cos(v.armPhase * 0.9) * 0.16;
+            }
           } else {
-            vLimbs.rightArm.rotation.x = THREE.MathUtils.damp(vLimbs.rightArm.rotation.x, -0.2, 3, dt);
-            vLimbs.rightArm.rotation.z = THREE.MathUtils.damp(vLimbs.rightArm.rotation.z, 0, 3, dt);
+            vLimbs.rightArm.rotation.x = THREE.MathUtils.damp(vLimbs.rightArm.rotation.x, -0.22, 3, dt);
+            vLimbs.rightArm.rotation.z = THREE.MathUtils.damp(vLimbs.rightArm.rotation.z, -0.08, 3, dt);
+            if (vLimbs.rightElbow) {
+              vLimbs.rightElbow.rotation.x = THREE.MathUtils.damp(vLimbs.rightElbow.rotation.x, -0.45, 3, dt);
+            }
           }
         }
         if (vLimbs?.head) {
-          vLimbs.head.rotation.y = THREE.MathUtils.damp(vLimbs.head.rotation.y, 0, 3, dt);
+          vLimbs.head.rotation.y = THREE.MathUtils.damp(
+            vLimbs.head.rotation.y,
+            Math.sin(v.armPhase * 0.5) * 0.12,
+            3,
+            dt
+          );
+          vLimbs.head.rotation.x = THREE.MathUtils.damp(vLimbs.head.rotation.x, 0, 3, dt);
         }
       }
     }
 
-    // 4. Update Sitting NPCs (Relaxing at benches, pos kamling, & warungs)
+    // 4. Update Walking Cats (Kucing Kampung: walking along sidewalks & alleys, swaying tails, sitting/grooming)
+    for (let cIdx = 0; cIdx < this.cats.length; cIdx++) {
+      const cat = this.cats[cIdx];
+      const distSq =
+        (cat.mesh.position.x - activePos.x) ** 2 +
+        (cat.mesh.position.z - activePos.z) ** 2;
+      const isVisible = distSq < 90 * 90;
+      cat.mesh.visible = isVisible;
+      if (!isVisible) continue;
+
+      const parts = cat.mesh.userData.catParts as
+        | {
+            bodyGroup: THREE.Group;
+            headPivot: THREE.Group;
+            tailPivot: THREE.Group;
+            frontLeft: THREE.Group;
+            frontRight: THREE.Group;
+            backLeft: THREE.Group;
+            backRight: THREE.Group;
+          }
+        | undefined;
+
+      cat.timer += dt;
+
+      if (cat.state === 'walking') {
+        const wp = cat.waypoints[cat.waypointIdx];
+        const dx = wp.x - cat.mesh.position.x;
+        const dz = wp.z - cat.mesh.position.z;
+        const distToWP = Math.hypot(dx, dz);
+        if (distToWP < 0.45) {
+          cat.waypointIdx = (cat.waypointIdx + 1) % cat.waypoints.length;
+        }
+
+        const nextWP = cat.waypoints[cat.waypointIdx];
+        const targetH = Math.atan2(
+          nextWP.x - cat.mesh.position.x,
+          nextWP.z - cat.mesh.position.z
+        );
+        let hDiff = targetH - cat.heading;
+        while (hDiff > Math.PI) hDiff -= Math.PI * 2;
+        while (hDiff < -Math.PI) hDiff += Math.PI * 2;
+        cat.heading += Math.sign(hDiff) * Math.min(Math.abs(hDiff), 6.5 * dt);
+
+        cat.mesh.position.x += Math.sin(cat.heading) * cat.speed * dt;
+        cat.mesh.position.z += Math.cos(cat.heading) * cat.speed * dt;
+        cat.mesh.rotation.y = cat.heading;
+
+        cat.walkCycle += dt * cat.speed * 7.2;
+        if (parts) {
+          const legSwing = Math.sin(cat.walkCycle) * 0.55;
+          parts.frontLeft.rotation.x = legSwing;
+          parts.backRight.rotation.x = legSwing;
+          parts.frontRight.rotation.x = -legSwing;
+          parts.backLeft.rotation.x = -legSwing;
+
+          parts.bodyGroup.rotation.x = THREE.MathUtils.damp(
+            parts.bodyGroup.rotation.x,
+            0,
+            8,
+            dt
+          );
+          parts.bodyGroup.position.y = Math.abs(Math.sin(cat.walkCycle * 2)) * 0.018;
+          parts.headPivot.rotation.x = Math.sin(cat.walkCycle * 2) * 0.06;
+          parts.headPivot.rotation.y = Math.sin(cat.walkCycle * 0.5) * 0.14;
+          parts.tailPivot.rotation.z = Math.sin(cat.walkCycle * 0.85) * 0.35;
+          parts.tailPivot.rotation.x = Math.cos(cat.walkCycle * 0.85) * 0.12;
+        }
+
+        if (cat.timer >= cat.duration) {
+          cat.state = 'sitting';
+          cat.timer = 0;
+          cat.duration = 4.0 + (cIdx % 3) * 1.5;
+        }
+      } else {
+        // Sitting / Looking around / Grooming posture
+        if (parts) {
+          parts.frontLeft.rotation.x = THREE.MathUtils.damp(parts.frontLeft.rotation.x, 0, 8, dt);
+          parts.frontRight.rotation.x = THREE.MathUtils.damp(parts.frontRight.rotation.x, 0, 8, dt);
+          parts.backLeft.rotation.x = THREE.MathUtils.damp(parts.backLeft.rotation.x, -0.55, 8, dt);
+          parts.backRight.rotation.x = THREE.MathUtils.damp(parts.backRight.rotation.x, -0.55, 8, dt);
+          parts.bodyGroup.rotation.x = THREE.MathUtils.damp(
+            parts.bodyGroup.rotation.x,
+            -0.28,
+            6,
+            dt
+          );
+          parts.bodyGroup.position.y = THREE.MathUtils.damp(
+            parts.bodyGroup.position.y,
+            -0.03,
+            6,
+            dt
+          );
+          parts.headPivot.rotation.y = Math.sin(elapsed * 2.2 + cIdx) * 0.45;
+          parts.headPivot.rotation.x = 0.22 + Math.sin(elapsed * 3.5) * 0.08;
+          parts.tailPivot.rotation.z = Math.sin(elapsed * 3.0 + cIdx) * 0.42;
+        }
+
+        if (cat.timer >= cat.duration) {
+          cat.state = 'walking';
+          cat.timer = 0;
+          cat.duration = 9.0 + (cIdx % 5) * 2.8;
+        }
+      }
+    }
+
+    // 5. Update Flying Birds (Burung Merpati, Gereja & Elang circling and flapping wings in the sky)
+    for (let bIdx = 0; bIdx < this.birds.length; bIdx++) {
+      const bird = this.birds[bIdx];
+      bird.angle += bird.angularSpeed * dt;
+      bird.flapPhase += bird.flapSpeed * dt;
+
+      let nextX: number;
+      let nextZ: number;
+      if (bird.figureEight) {
+        nextX = bird.centerX + Math.sin(bird.angle) * bird.radiusX;
+        nextZ = bird.centerZ + Math.sin(bird.angle * 2) * (bird.radiusZ * 0.65);
+      } else {
+        nextX = bird.centerX + Math.cos(bird.angle) * bird.radiusX;
+        nextZ = bird.centerZ + Math.sin(bird.angle) * bird.radiusZ;
+      }
+
+      const dx = nextX - bird.mesh.position.x;
+      const dz = nextZ - bird.mesh.position.z;
+      const distSq =
+        (nextX - activePos.x) ** 2 + (nextZ - activePos.z) ** 2;
+      const isVisible = distSq < 145 * 145;
+      bird.mesh.visible = isVisible;
+
+      const nextY =
+        bird.baseY + Math.sin(bird.angle * 2.0 + bIdx) * 1.15;
+      bird.mesh.position.set(nextX, nextY, nextZ);
+
+      if (!isVisible) continue;
+
+      if (Math.abs(dx) + Math.abs(dz) > 0.0001) {
+        bird.mesh.rotation.y = Math.atan2(dx, dz);
+      }
+      // Subtle aerodynamic banking into turns
+      bird.mesh.rotation.z = bird.figureEight
+        ? Math.cos(bird.angle * 2) * 0.22
+        : -0.18;
+
+      const wings = bird.mesh.userData.wings as
+        | { leftWing: THREE.Group; rightWing: THREE.Group }
+        | undefined;
+      if (wings) {
+        // Eagles glide occasionally; pigeons and sparrows flap briskly
+        const isGliding =
+          bird.variant === 'elang' && Math.sin(bird.angle * 1.5 + bIdx) > 0.25;
+        const flapAngle = isGliding
+          ? 0.08 + Math.sin(bird.flapPhase * 0.3) * 0.05
+          : Math.sin(bird.flapPhase) * 0.68;
+        wings.leftWing.rotation.z = flapAngle;
+        wings.rightWing.rotation.z = -flapAngle;
+      }
+    }
+
+    // 6. Update Sitting NPCs (Relaxing at benches, pos kamling, & warungs with breathing & coffee-sipping gestures)
     const animTime = this.clock.getElapsedTime();
     for (let s = 0; s < this.sittingNPCs.length; s++) {
       const sitter = this.sittingNPCs[s];
@@ -4459,9 +5540,26 @@ export class CityEngine {
       sitter.visible = true;
 
       const sHead = sitter.userData.head;
+      const sLimbs = sitter.userData.limbs;
+      const sipWave = Math.max(0, Math.sin(animTime * 0.55 + s * 1.9) - 0.55) * 2.2; // periodic coffee sip / chatting gesture
+
       if (sHead) {
         sHead.rotation.y = Math.sin(animTime * 0.7 + s * 1.3) * 0.24;
-        sHead.rotation.x = 0.05 + Math.sin(animTime * 0.4 + s) * 0.04;
+        sHead.rotation.x = 0.04 + Math.sin(animTime * 0.4 + s) * 0.04 - sipWave * 0.14;
+      }
+      if (sLimbs) {
+        if (sLimbs.upperBodyGroup) {
+          sLimbs.upperBodyGroup.rotation.x = -0.04 + Math.sin(animTime * 1.6 + s) * 0.018;
+          sLimbs.upperBodyGroup.rotation.y = Math.sin(animTime * 0.5 + s * 0.9) * 0.045;
+        }
+        if (sLimbs.rightArm && sLimbs.rightElbow) {
+          sLimbs.rightArm.rotation.x = -0.42 - sipWave * 0.42;
+          sLimbs.rightElbow.rotation.x = -0.65 - sipWave * 0.58;
+        }
+        if (sLimbs.leftArm && sLimbs.leftElbow) {
+          sLimbs.leftArm.rotation.x = -0.35 + Math.sin(animTime * 0.8 + s) * 0.06;
+          sLimbs.leftElbow.rotation.x = -0.52 + Math.cos(animTime * 0.8 + s) * 0.08;
+        }
       }
     }
   }
@@ -4630,7 +5728,7 @@ export class CityEngine {
 
   private broadcastHud(force = false) {
     const now = performance.now();
-    if (!force && now - this.lastHudBroadcast < 120) return;
+    if (!force && now - this.lastHudBroadcast < 200) return;
     this.lastHudBroadcast = now;
 
     const activePos = this.drivenVehicle
@@ -4744,6 +5842,7 @@ export class CityEngine {
 
     const dt = Math.min(this.clock.getDelta(), 0.1);
     const elapsed = this.clock.getElapsedTime();
+    this.frameCounter++;
 
     if (this.drivenVehicle) {
       this.updateDrivenVehicle(dt);
@@ -4755,7 +5854,15 @@ export class CityEngine {
       ? this.drivenVehicle.mesh.position
       : this.playerPos;
 
-    this.keyLightTargetObj.position.set(activePos.x, 0, activePos.z);
+    // Throttle shadow map pass & spatial static district culling to every 3rd frame for smooth FPS
+    if (this.frameCounter % 3 === 0) {
+      this.keyLightTargetObj.position.set(activePos.x, 0, activePos.z);
+      this.keyLightTargetObj.updateMatrixWorld();
+      this.updateStaticCulling(activePos.x, activePos.z);
+      if (!this.isSoftwareGl) {
+        this.renderer.shadowMap.needsUpdate = true;
+      }
+    }
 
     this.updateTrafficLights(dt);
     this.updateAITrafficAndPedestrians(dt, elapsed);

@@ -5,6 +5,7 @@ import {
   createBatikFabricTexture,
   createGentengClayTexture,
   createLicensePlateTexture,
+  createLosPasarSignTexture,
   createMaduraSignTexture,
   createMinimarketSignTexture,
   createPasarBannerTexture,
@@ -17,30 +18,39 @@ import {
   createWarungSpandukTexture,
 } from './textures';
 
-function createContactShadow(width: number, depth: number): THREE.Mesh {
-  const canvas = document.createElement('canvas');
-  canvas.width = 128;
-  canvas.height = 128;
-  const ctx = canvas.getContext('2d')!;
-  const grad = ctx.createRadialGradient(64, 64, 8, 64, 64, 60);
-  grad.addColorStop(0, 'rgba(0,0,0,0.65)');
-  grad.addColorStop(0.65, 'rgba(0,0,0,0.28)');
-  grad.addColorStop(1, 'rgba(0,0,0,0)');
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, 128, 128);
+let _sharedContactShadowMat: THREE.MeshBasicMaterial | null = null;
+let _sharedContactShadowGeo: THREE.PlaneGeometry | null = null;
 
-  const tex = new THREE.CanvasTexture(canvas);
-  const mat = new THREE.MeshBasicMaterial({
-    map: tex,
-    transparent: true,
-    depthWrite: false,
-    opacity: 0.55,
-    polygonOffset: true,
-    polygonOffsetFactor: -1,
-    polygonOffsetUnits: -1,
-  });
-  const plane = new THREE.Mesh(new THREE.PlaneGeometry(width, depth), mat);
-  plane.rotation.x = -Math.PI / 2;
+function createContactShadow(width: number, depth: number): THREE.Mesh {
+  if (!_sharedContactShadowMat) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 64;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d')!;
+    const grad = ctx.createRadialGradient(32, 32, 4, 32, 32, 30);
+    grad.addColorStop(0, 'rgba(0,0,0,0.65)');
+    grad.addColorStop(0.65, 'rgba(0,0,0,0.28)');
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 64, 64);
+
+    const tex = new THREE.CanvasTexture(canvas);
+    _sharedContactShadowMat = new THREE.MeshBasicMaterial({
+      map: tex,
+      transparent: true,
+      depthWrite: false,
+      opacity: 0.55,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1,
+    });
+  }
+  if (!_sharedContactShadowGeo) {
+    _sharedContactShadowGeo = new THREE.PlaneGeometry(1, 1);
+    _sharedContactShadowGeo.rotateX(-Math.PI / 2);
+  }
+  const plane = new THREE.Mesh(_sharedContactShadowGeo, _sharedContactShadowMat);
+  plane.scale.set(width, 1, depth);
   plane.position.y = 0.025;
   return plane;
 }
@@ -52,187 +62,474 @@ export function createPlayerCharacter(
   const group = new THREE.Group();
   group.name = 'PlayerCharacter';
 
-  // Ground contact shadow
+  // Ground contact shadow (stays flat on ground)
   group.add(createContactShadow(1.3, 1.3));
+
+  // Root animated body container (allows vertical stride bounce & turn banking without lifting contact shadow)
+  const bodyRoot = new THREE.Group();
+  group.add(bodyRoot);
 
   const skinMat = new THREE.MeshStandardMaterial({
     color: 0xd99b66,
-    roughness: 0.65,
-    metalness: 0.05,
+    roughness: 0.6,
+    metalness: 0.04,
   });
 
-  let torsoMat: THREE.MeshStandardMaterial;
+  let jacketMat: THREE.MeshStandardMaterial;
+  let innerShirtColor = 0xf8fafc;
   if (outfit === 'batik') {
-    torsoMat = new THREE.MeshStandardMaterial({
+    jacketMat = new THREE.MeshStandardMaterial({
       map: createBatikFabricTexture(maxAnisotropy),
-      roughness: 0.78,
+      roughness: 0.72,
       metalness: 0.08,
     });
+    innerShirtColor = 0x1e293b;
   } else if (outfit === 'jaket_kulit') {
-    torsoMat = new THREE.MeshStandardMaterial({
-      color: 0x1e293b,
-      roughness: 0.32,
-      metalness: 0.35,
+    jacketMat = new THREE.MeshStandardMaterial({
+      color: 0x18181b,
+      roughness: 0.3,
+      metalness: 0.38,
     });
+    innerShirtColor = 0xdc2626;
   } else {
-    // Iconic Ojol Green Jacket with black & reflective stripes
-    torsoMat = new THREE.MeshStandardMaterial({
+    // Iconic Ojol Green Jacket
+    jacketMat = new THREE.MeshStandardMaterial({
       color: 0x16a34a,
-      roughness: 0.55,
+      roughness: 0.5,
       metalness: 0.12,
     });
+    innerShirtColor = 0xf8fafc;
   }
 
+  const innerShirtMat = new THREE.MeshStandardMaterial({
+    color: innerShirtColor,
+    roughness: 0.7,
+  });
+
+  const darkAccentMat = new THREE.MeshStandardMaterial({
+    color: 0x0f172a,
+    roughness: 0.65,
+  });
+
   const pantsMat = new THREE.MeshStandardMaterial({
-    color: 0x1e293b,
-    roughness: 0.82,
+    color: outfit === 'batik' ? 0x0f172a : 0x1e293b,
+    roughness: 0.78,
     metalness: 0.05,
   });
 
-  const shoeMat = new THREE.MeshStandardMaterial({
+  const shoeUpperMat = new THREE.MeshStandardMaterial({
     color: 0x0f172a,
-    roughness: 0.35,
-    metalness: 0.25,
+    roughness: 0.4,
+    metalness: 0.2,
+  });
+  const shoeSoleMat = new THREE.MeshStandardMaterial({
+    color: 0xf8fafc,
+    roughness: 0.5,
   });
 
-  // Left & Right Legs (pivoted at hip y = 0.82)
-  const legGeo = new THREE.CapsuleGeometry(0.12, 0.48, 4, 8);
-  legGeo.translate(0, -0.28, 0);
+  // 1. Pelvis / Hip Belt Group
+  const pelvisGroup = new THREE.Group();
+  pelvisGroup.position.set(0, 0.88, 0);
+  const pelvisMesh = new THREE.Mesh(
+    new THREE.CapsuleGeometry(0.14, 0.22, 6, 10),
+    pantsMat
+  );
+  pelvisMesh.rotation.z = Math.PI / 2;
+  pelvisMesh.scale.set(1, 1, 0.82);
+  pelvisMesh.castShadow = true;
+  pelvisGroup.add(pelvisMesh);
 
-  const leftLeg = new THREE.Group();
-  leftLeg.position.set(-0.16, 0.82, 0);
-  const leftLegMesh = new THREE.Mesh(legGeo, pantsMat);
-  leftLegMesh.castShadow = true;
-  leftLeg.add(leftLegMesh);
+  // Leather belt & buckle
+  const belt = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.24, 0.24, 0.07, 14),
+    darkAccentMat
+  );
+  belt.scale.set(1.08, 1, 0.72);
+  belt.position.y = 0.06;
+  pelvisGroup.add(belt);
 
-  const shoeGeo = new THREE.BoxGeometry(0.24, 0.14, 0.36);
-  const leftShoe = new THREE.Mesh(shoeGeo, shoeMat);
-  leftShoe.position.set(0, -0.68, 0.05);
-  leftLeg.add(leftShoe);
-  group.add(leftLeg);
+  const buckle = new THREE.Mesh(
+    new THREE.BoxGeometry(0.09, 0.075, 0.03),
+    new THREE.MeshStandardMaterial({ color: 0xfacc15, metalness: 0.8, roughness: 0.2 })
+  );
+  buckle.position.set(0, 0.06, 0.175);
+  pelvisGroup.add(buckle);
+  bodyRoot.add(pelvisGroup);
 
-  const rightLeg = new THREE.Group();
-  rightLeg.position.set(0.16, 0.82, 0);
-  const rightLegMesh = new THREE.Mesh(legGeo, pantsMat);
-  rightLegMesh.castShadow = true;
-  rightLeg.add(rightLegMesh);
+  // 2. Articulated Two-Segment Legs (Thigh -> Knee Joint -> Shin/Calf -> Sneaker)
+  const buildArticulatedLeg = (hipX: number) => {
+    const hipPivot = new THREE.Group();
+    hipPivot.position.set(hipX, 0.86, 0);
 
-  const rightShoe = new THREE.Mesh(shoeGeo, shoeMat);
-  rightShoe.position.set(0, -0.68, 0.05);
-  rightLeg.add(rightShoe);
-  group.add(rightLeg);
+    // Upper Leg (Thigh)
+    const thighGeo = new THREE.CapsuleGeometry(0.115, 0.26, 5, 10);
+    thighGeo.translate(0, -0.18, 0);
+    const thighMesh = new THREE.Mesh(thighGeo, pantsMat);
+    thighMesh.castShadow = true;
+    hipPivot.add(thighMesh);
 
-  // Torso (extruded beveled chest block)
+    // Knee Pivot at y = -0.38 relative to hip
+    const kneePivot = new THREE.Group();
+    kneePivot.position.set(0, -0.38, 0);
+
+    const shinGeo = new THREE.CapsuleGeometry(0.098, 0.26, 5, 10);
+    shinGeo.translate(0, -0.18, 0);
+    const shinMesh = new THREE.Mesh(shinGeo, pantsMat);
+    shinMesh.castShadow = true;
+    kneePivot.add(shinMesh);
+
+    // Ankle & Detailed Sneaker
+    const shoeGroup = new THREE.Group();
+    shoeGroup.position.set(0, -0.4, 0.04);
+
+    const shoeUpper = new THREE.Mesh(
+      new THREE.BoxGeometry(0.21, 0.11, 0.34),
+      shoeUpperMat
+    );
+    shoeUpper.position.set(0, 0.03, 0);
+    shoeUpper.castShadow = true;
+    shoeGroup.add(shoeUpper);
+
+    const shoeSole = new THREE.Mesh(
+      new THREE.BoxGeometry(0.23, 0.045, 0.37),
+      shoeSoleMat
+    );
+    shoeSole.position.set(0, -0.04, 0.005);
+    shoeGroup.add(shoeSole);
+
+    const shoeStripe = new THREE.Mesh(
+      new THREE.BoxGeometry(0.218, 0.03, 0.16),
+      shoeSoleMat
+    );
+    shoeStripe.position.set(0, 0.03, -0.02);
+    shoeGroup.add(shoeStripe);
+
+    kneePivot.add(shoeGroup);
+    hipPivot.add(kneePivot);
+    bodyRoot.add(hipPivot);
+
+    return { hipPivot, kneePivot };
+  };
+
+  const leftLegData = buildArticulatedLeg(-0.155);
+  const rightLegData = buildArticulatedLeg(0.155);
+
+  const leftLeg = leftLegData.hipPivot;
+  const rightLeg = rightLegData.hipPivot;
+  const leftKnee = leftLegData.kneePivot;
+  const rightKnee = rightLegData.kneePivot;
+
+  // 3. Upper Body / Spine Pivot (at waist y = 0.94)
+  const upperBodyGroup = new THREE.Group();
+  upperBodyGroup.position.set(0, 0.94, 0);
+  bodyRoot.add(upperBodyGroup);
+
+  // Sculpted Torso (Tapered athletic chest)
   const torsoShape = new THREE.Shape();
-  torsoShape.moveTo(-0.26, -0.32);
-  torsoShape.lineTo(0.26, -0.32);
-  torsoShape.lineTo(0.3, 0.32);
-  torsoShape.lineTo(-0.3, 0.32);
+  torsoShape.moveTo(-0.23, 0.0);
+  torsoShape.lineTo(0.23, 0.0);
+  torsoShape.lineTo(0.29, 0.56);
+  torsoShape.lineTo(-0.29, 0.56);
   torsoShape.closePath();
 
   const torsoGeo = new THREE.ExtrudeGeometry(torsoShape, {
-    depth: 0.26,
+    depth: 0.24,
     bevelEnabled: true,
-    bevelThickness: 0.04,
+    bevelThickness: 0.045,
     bevelSize: 0.04,
-    bevelSegments: 2,
+    bevelSegments: 3,
   });
-  torsoGeo.center();
-  const torso = new THREE.Mesh(torsoGeo, torsoMat);
-  torso.position.set(0, 1.18, 0);
+  torsoGeo.translate(0, 0, -0.12);
+  const torso = new THREE.Mesh(torsoGeo, jacketMat);
+  torso.position.set(0, 0.0, 0);
   torso.castShadow = true;
-  group.add(torso);
+  upperBodyGroup.add(torso);
 
-  // Reflective chest strip for Ojol outfit
+  // Inner Shirt V-Neck / Chest Panel
+  if (outfit !== 'batik') {
+    const innerTee = new THREE.Mesh(
+      new THREE.BoxGeometry(0.18, 0.46, 0.04),
+      innerShirtMat
+    );
+    innerTee.position.set(0, 0.31, 0.15);
+    upperBodyGroup.add(innerTee);
+  }
+
+  // Jacket Collar
+  const collarGeo = new THREE.CylinderGeometry(0.16, 0.19, 0.11, 12, 1, true, -Math.PI * 0.8, Math.PI * 1.6);
+  const collar = new THREE.Mesh(collarGeo, outfit === 'ojol' ? darkAccentMat : jacketMat);
+  collar.rotation.y = Math.PI;
+  collar.position.set(0, 0.6, 0);
+  upperBodyGroup.add(collar);
+
+  // Outfit-specific details (Reflective stripes + Sling bag for Ojol)
   if (outfit === 'ojol') {
     const stripMat = new THREE.MeshStandardMaterial({
       color: 0xe2e8f0,
       emissive: 0x38bdf8,
-      emissiveIntensity: 0.25,
+      emissiveIntensity: 0.3,
       roughness: 0.2,
       metalness: 0.8,
     });
-    const strip = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.08, 0.33), stripMat);
-    strip.position.set(0, 1.24, 0);
-    group.add(strip);
+    const strip = new THREE.Mesh(new THREE.BoxGeometry(0.59, 0.065, 0.33), stripMat);
+    strip.position.set(0, 0.36, 0);
+    upperBodyGroup.add(strip);
+
+    // Shoulder pads
+    for (const sx of [-0.26, 0.26]) {
+      const pad = new THREE.Mesh(
+        new THREE.BoxGeometry(0.14, 0.07, 0.28),
+        darkAccentMat
+      );
+      pad.position.set(sx, 0.56, 0);
+      upperBodyGroup.add(pad);
+    }
+
+    // Crossbody Sling Bag (Tas Selempang Ojol)
+    const strap = new THREE.Mesh(
+      new THREE.BoxGeometry(0.07, 0.62, 0.32),
+      darkAccentMat
+    );
+    strap.position.set(0.02, 0.3, 0);
+    strap.rotation.z = 0.58;
+    upperBodyGroup.add(strap);
+
+    const pouch = new THREE.Mesh(
+      new THREE.BoxGeometry(0.22, 0.15, 0.09),
+      darkAccentMat
+    );
+    pouch.position.set(-0.08, 0.22, 0.17);
+    pouch.rotation.z = -0.15;
+    upperBodyGroup.add(pouch);
   }
 
-  // Arms (pivoted at shoulder y = 1.42)
-  const armGeo = new THREE.CapsuleGeometry(0.095, 0.44, 4, 8);
-  armGeo.translate(0, -0.24, 0);
+  // 4. Articulated Two-Segment Arms (Shoulder -> Upper Arm -> Elbow Joint -> Forearm -> Hand)
+  const buildArticulatedArm = (shoulderX: number, isLeft: boolean) => {
+    const shoulderPivot = new THREE.Group();
+    shoulderPivot.position.set(shoulderX, 0.52, 0);
 
-  const leftArm = new THREE.Group();
-  leftArm.position.set(-0.38, 1.42, 0);
-  const leftSleeve = new THREE.Mesh(armGeo, torsoMat);
-  leftSleeve.castShadow = true;
-  leftArm.add(leftSleeve);
-  const leftHand = new THREE.Mesh(new THREE.SphereGeometry(0.095, 8, 8), skinMat);
-  leftHand.position.set(0, -0.52, 0);
-  leftArm.add(leftHand);
-  group.add(leftArm);
+    // Upper Arm (Sleeve)
+    const upperArmGeo = new THREE.CapsuleGeometry(0.088, 0.21, 5, 10);
+    upperArmGeo.translate(0, -0.13, 0);
+    const upperArmMesh = new THREE.Mesh(upperArmGeo, jacketMat);
+    upperArmMesh.castShadow = true;
+    shoulderPivot.add(upperArmMesh);
 
-  const rightArm = new THREE.Group();
-  rightArm.position.set(0.38, 1.42, 0);
-  const rightSleeve = new THREE.Mesh(armGeo, torsoMat);
-  rightSleeve.castShadow = true;
-  rightArm.add(rightSleeve);
-  const rightHand = new THREE.Mesh(new THREE.SphereGeometry(0.095, 8, 8), skinMat);
-  rightHand.position.set(0, -0.52, 0);
-  rightArm.add(rightHand);
-  group.add(rightArm);
+    // Elbow Pivot at y = -0.27 relative to shoulder
+    const elbowPivot = new THREE.Group();
+    elbowPivot.position.set(0, -0.27, 0);
 
-  // Head + Sunglasses + Hair/Helmet
+    const forearmGeo = new THREE.CapsuleGeometry(
+      0.076,
+      0.2,
+      5,
+      10
+    );
+    forearmGeo.translate(0, -0.12, 0);
+    const forearmMesh = new THREE.Mesh(
+      forearmGeo,
+      outfit === 'batik' ? skinMat : jacketMat
+    );
+    forearmMesh.castShadow = true;
+    elbowPivot.add(forearmMesh);
+
+    // Wristwatch on Left Wrist
+    if (isLeft) {
+      const watch = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.082, 0.082, 0.04, 10),
+        darkAccentMat
+      );
+      watch.position.set(0, -0.21, 0);
+      elbowPivot.add(watch);
+    }
+
+    // Sculpted Hand & Thumb
+    const handGroup = new THREE.Group();
+    handGroup.position.set(0, -0.27, 0);
+    const palm = new THREE.Mesh(
+      new THREE.SphereGeometry(0.082, 10, 10),
+      skinMat
+    );
+    palm.scale.set(0.88, 1.08, 0.95);
+    handGroup.add(palm);
+
+    const thumb = new THREE.Mesh(
+      new THREE.CapsuleGeometry(0.025, 0.04, 4, 6),
+      skinMat
+    );
+    thumb.position.set(isLeft ? 0.05 : -0.05, 0.01, 0.04);
+    thumb.rotation.x = 0.5;
+    handGroup.add(thumb);
+
+    elbowPivot.add(handGroup);
+    shoulderPivot.add(elbowPivot);
+    upperBodyGroup.add(shoulderPivot);
+
+    return { shoulderPivot, elbowPivot };
+  };
+
+  const leftArmData = buildArticulatedArm(-0.36, true);
+  const rightArmData = buildArticulatedArm(0.36, false);
+
+  const leftArm = leftArmData.shoulderPivot;
+  const rightArm = rightArmData.shoulderPivot;
+  const leftElbow = leftArmData.elbowPivot;
+  const rightElbow = rightArmData.elbowPivot;
+
+  // 5. Neck & Expressive Head Group (at y = 0.62 relative to upperBodyGroup)
+  const neck = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.085, 0.1, 0.14, 10),
+    skinMat
+  );
+  neck.position.set(0, 0.62, 0);
+  upperBodyGroup.add(neck);
+
   const headGroup = new THREE.Group();
-  headGroup.position.set(0, 1.72, 0);
+  headGroup.position.set(0, 0.78, 0);
 
-  const headMesh = new THREE.Mesh(new THREE.SphereGeometry(0.22, 16, 16), skinMat);
+  // Rounded Head
+  const headMesh = new THREE.Mesh(
+    new THREE.SphereGeometry(0.215, 18, 16),
+    skinMat
+  );
+  headMesh.scale.set(0.96, 1.05, 0.98);
   headMesh.castShadow = true;
   headGroup.add(headMesh);
 
-  // Cool dark sunglasses
+  // Left & Right Ears
+  for (const ex of [-0.205, 0.205]) {
+    const ear = new THREE.Mesh(
+      new THREE.SphereGeometry(0.045, 8, 8),
+      skinMat
+    );
+    ear.scale.set(0.55, 1.1, 0.8);
+    ear.position.set(ex, 0.0, 0);
+    headGroup.add(ear);
+  }
+
+  // Nose bridge
+  const nose = new THREE.Mesh(
+    new THREE.CapsuleGeometry(0.024, 0.04, 4, 6),
+    skinMat
+  );
+  nose.position.set(0, -0.01, 0.21);
+  headGroup.add(nose);
+
+  // Stylish Dark Aviator Sunglasses
   const visorMat = new THREE.MeshPhysicalMaterial({
     color: 0x090d16,
-    roughness: 0.1,
+    roughness: 0.08,
     metalness: 0.9,
     clearcoat: 1.0,
   });
-  const glasses = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.09, 0.12), visorMat);
-  glasses.position.set(0, 0.03, 0.18);
-  headGroup.add(glasses);
+  for (const gx of [-0.075, 0.075]) {
+    const lens = new THREE.Mesh(
+      new THREE.BoxGeometry(0.125, 0.078, 0.04),
+      visorMat
+    );
+    lens.position.set(gx, 0.035, 0.195);
+    lens.rotation.y = gx < 0 ? 0.12 : -0.12;
+    headGroup.add(lens);
+  }
+  const glassBridge = new THREE.Mesh(
+    new THREE.BoxGeometry(0.06, 0.018, 0.03),
+    new THREE.MeshStandardMaterial({ color: 0xfacc15, metalness: 0.8, roughness: 0.2 })
+  );
+  glassBridge.position.set(0, 0.045, 0.205);
+  headGroup.add(glassBridge);
+
+  // Confident Smile Mouth Line
+  const smile = new THREE.Mesh(
+    new THREE.BoxGeometry(0.085, 0.018, 0.02),
+    new THREE.MeshBasicMaterial({ color: 0x451a03 })
+  );
+  smile.position.set(0, -0.085, 0.198);
+  headGroup.add(smile);
 
   if (outfit === 'ojol') {
-    // Iconic Green Ojol Helmet
+    // Iconic Green Ojol Half-Face Helmet with Black Trim & Top Visor Peak
     const helmetMat = new THREE.MeshPhysicalMaterial({
       color: 0x15803d,
-      roughness: 0.2,
-      metalness: 0.3,
-      clearcoat: 0.9,
+      roughness: 0.18,
+      metalness: 0.28,
+      clearcoat: 0.95,
     });
     const helmet = new THREE.Mesh(
-      new THREE.SphereGeometry(0.25, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.65),
+      new THREE.SphereGeometry(0.245, 18, 14, 0, Math.PI * 2, 0, Math.PI * 0.64),
       helmetMat
     );
     helmet.position.y = 0.02;
     headGroup.add(helmet);
+
+    // Helmet front peak cap
+    const peak = new THREE.Mesh(
+      new THREE.BoxGeometry(0.32, 0.035, 0.16),
+      darkAccentMat
+    );
+    peak.position.set(0, 0.13, 0.19);
+    peak.rotation.x = 0.18;
+    headGroup.add(peak);
+
+    // Helmet ear pads & chin strap
+    for (const sx of [-0.21, 0.21]) {
+      const earPad = new THREE.Mesh(
+        new THREE.BoxGeometry(0.05, 0.16, 0.16),
+        darkAccentMat
+      );
+      earPad.position.set(sx, -0.02, -0.01);
+      headGroup.add(earPad);
+    }
+  } else if (outfit === 'batik') {
+    // Authentic Velvet Black Indonesian Peci Songkok with Gold Trim
+    const peciMat = new THREE.MeshStandardMaterial({
+      color: 0x0f172a,
+      roughness: 0.9,
+    });
+    const peci = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.205, 0.215, 0.15, 16),
+      peciMat
+    );
+    peci.scale.set(0.95, 1, 1.06);
+    peci.position.set(0, 0.18, 0);
+    peci.rotation.x = -0.05;
+    headGroup.add(peci);
   } else {
-    // Stylized Indonesian Peci / Hair
+    // Stylized Layered Modern Hair
     const hairMat = new THREE.MeshStandardMaterial({
       color: 0x0f172a,
-      roughness: 0.85,
+      roughness: 0.8,
       metalness: 0.05,
     });
-    const hair = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.16, 0.38), hairMat);
-    hair.position.set(0, 0.17, 0);
-    headGroup.add(hair);
+    const hairCap = new THREE.Mesh(
+      new THREE.SphereGeometry(0.23, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.58),
+      hairMat
+    );
+    hairCap.position.set(0, 0.03, -0.01);
+    headGroup.add(hairCap);
+
+    const quiff = new THREE.Mesh(
+      new THREE.BoxGeometry(0.28, 0.1, 0.18),
+      hairMat
+    );
+    quiff.position.set(0, 0.2, 0.1);
+    quiff.rotation.x = -0.25;
+    headGroup.add(quiff);
   }
 
-  group.add(headGroup);
+  upperBodyGroup.add(headGroup);
 
   group.userData.limbs = {
+    bodyRoot,
+    pelvisGroup,
+    upperBodyGroup,
     leftLeg,
     rightLeg,
+    leftKnee,
+    rightKnee,
     leftArm,
     rightArm,
+    leftElbow,
+    rightElbow,
     headGroup,
   };
 
@@ -246,6 +543,9 @@ export function createNPCPedestrian(
 ): THREE.Group {
   const group = new THREE.Group();
   group.add(createContactShadow(1.1, 1.1));
+
+  const bodyRoot = new THREE.Group();
+  group.add(bodyRoot);
 
   // Resolve authentic Indonesian outfit colors per archetype
   let finalShirt = shirtColor;
@@ -264,100 +564,311 @@ export function createNPCPedestrian(
     finalPants = 0x14532d; // Sarung / Celana Hijau Tua
   }
 
-  const skinMat = new THREE.MeshStandardMaterial({ color: 0xd49464, roughness: 0.7 });
-  const shirtMat = new THREE.MeshStandardMaterial({ color: finalShirt, roughness: 0.72 });
-  const pantsMat = new THREE.MeshStandardMaterial({ color: finalPants, roughness: 0.85 });
+  const skinMat = new THREE.MeshStandardMaterial({ color: 0xd49464, roughness: 0.65 });
+  const shirtMat = new THREE.MeshStandardMaterial({ color: finalShirt, roughness: 0.7 });
+  const pantsMat = new THREE.MeshStandardMaterial({ color: finalPants, roughness: 0.82 });
+  const shoeMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.45 });
+  const soleMat = new THREE.MeshStandardMaterial({ color: 0xf1f5f9, roughness: 0.55 });
+  const darkMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.75 });
 
-  const legGeo = new THREE.CapsuleGeometry(0.1, 0.45, 4, 8);
-  legGeo.translate(0, -0.25, 0);
+  // 1. Pelvis / Hip Group
+  const pelvis = new THREE.Mesh(
+    new THREE.BoxGeometry(0.42, 0.16, 0.24),
+    pantsMat
+  );
+  pelvis.position.set(0, 0.82, 0);
+  bodyRoot.add(pelvis);
 
-  const leftLeg = new THREE.Mesh(legGeo, pantsMat);
-  leftLeg.position.set(-0.14, 0.75, 0);
-  group.add(leftLeg);
+  // 2. Articulated Two-Segment Legs (Thigh -> Knee -> Shin -> Shoe)
+  const thighGeo = new THREE.CapsuleGeometry(0.098, 0.24, 4, 8);
+  thighGeo.translate(0, -0.15, 0);
+  const shinGeo = new THREE.CapsuleGeometry(0.084, 0.24, 4, 8);
+  shinGeo.translate(0, -0.15, 0);
 
-  const rightLeg = new THREE.Mesh(legGeo, pantsMat);
-  rightLeg.position.set(0.14, 0.75, 0);
-  group.add(rightLeg);
+  const buildNPCLeg = (hipX: number) => {
+    const hipPivot = new THREE.Group();
+    hipPivot.position.set(hipX, 0.8, 0);
 
-  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.62, 0.26), shirtMat);
-  torso.position.set(0, 1.1, 0);
+    const thigh = new THREE.Mesh(thighGeo, pantsMat);
+    thigh.castShadow = true;
+    hipPivot.add(thigh);
+
+    const kneePivot = new THREE.Group();
+    kneePivot.position.set(0, -0.34, 0);
+
+    const shin = new THREE.Mesh(shinGeo, pantsMat);
+    shin.castShadow = true;
+    kneePivot.add(shin);
+
+    const shoe = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.09, 0.29), shoeMat);
+    shoe.position.set(0, -0.36, 0.035);
+    kneePivot.add(shoe);
+
+    const sole = new THREE.Mesh(new THREE.BoxGeometry(0.19, 0.035, 0.31), soleMat);
+    sole.position.set(0, -0.41, 0.035);
+    kneePivot.add(sole);
+
+    hipPivot.add(kneePivot);
+    bodyRoot.add(hipPivot);
+    return { hipPivot, kneePivot };
+  };
+
+  const leftLegData = buildNPCLeg(-0.135);
+  const rightLegData = buildNPCLeg(0.135);
+  const leftLeg = leftLegData.hipPivot;
+  const rightLeg = rightLegData.hipPivot;
+  const leftKnee = leftLegData.kneePivot;
+  const rightKnee = rightLegData.kneePivot;
+
+  // 3. Upper Body / Spine Group (pivoted at waist y = 0.88)
+  const upperBodyGroup = new THREE.Group();
+  upperBodyGroup.position.set(0, 0.88, 0);
+  bodyRoot.add(upperBodyGroup);
+
+  const torsoShape = new THREE.Shape();
+  torsoShape.moveTo(-0.21, 0);
+  torsoShape.lineTo(0.21, 0);
+  torsoShape.lineTo(0.25, 0.54);
+  torsoShape.lineTo(-0.25, 0.54);
+  torsoShape.closePath();
+
+  const torsoGeo = new THREE.ExtrudeGeometry(torsoShape, {
+    depth: 0.22,
+    bevelEnabled: true,
+    bevelThickness: 0.035,
+    bevelSize: 0.03,
+    bevelSegments: 2,
+  });
+  torsoGeo.translate(0, 0, -0.11);
+  const torso = new THREE.Mesh(torsoGeo, shirtMat);
   torso.castShadow = true;
-  group.add(torso);
+  upperBodyGroup.add(torso);
 
-  // Archetype-specific details (SMA tie + backpack, Ojol stripe + helmet, Santri peci)
+  // Shirt Collar
+  const collar = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.13, 0.15, 0.08, 10),
+    shirtMat
+  );
+  collar.position.set(0, 0.57, 0);
+  upperBodyGroup.add(collar);
+
+  // Archetype-specific details (SMA tie + backpack, Ojol stripe, Santri koko embroidery, Batik placket)
   if (archetype === 'pelajar_sma') {
     const tie = new THREE.Mesh(
-      new THREE.BoxGeometry(0.08, 0.32, 0.04),
+      new THREE.BoxGeometry(0.065, 0.32, 0.03),
       new THREE.MeshStandardMaterial({ color: 0x475569, roughness: 0.6 })
     );
-    tie.position.set(0, 1.18, 0.14);
-    group.add(tie);
+    tie.position.set(0, 0.34, 0.14);
+    upperBodyGroup.add(tie);
 
     const backpack = new THREE.Mesh(
-      new THREE.BoxGeometry(0.36, 0.44, 0.18),
+      new THREE.BoxGeometry(0.34, 0.42, 0.16),
       new THREE.MeshStandardMaterial({ color: 0x1e3a8a, roughness: 0.75 })
     );
-    backpack.position.set(0, 1.12, -0.2);
+    backpack.position.set(0, 0.28, -0.2);
     backpack.castShadow = true;
-    group.add(backpack);
+    upperBodyGroup.add(backpack);
   } else if (archetype === 'ojol') {
     const chestStripe = new THREE.Mesh(
-      new THREE.BoxGeometry(0.5, 0.12, 0.28),
-      new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.5 })
+      new THREE.BoxGeometry(0.51, 0.07, 0.29),
+      new THREE.MeshStandardMaterial({
+        color: 0xe2e8f0,
+        emissive: 0x38bdf8,
+        emissiveIntensity: 0.22,
+        roughness: 0.3,
+      })
     );
-    chestStripe.position.set(0, 1.18, 0);
-    group.add(chestStripe);
+    chestStripe.position.set(0, 0.34, 0);
+    upperBodyGroup.add(chestStripe);
+  } else if (archetype === 'santri') {
+    // Gold Baju Koko vertical embroidery placket
+    const placket = new THREE.Mesh(
+      new THREE.BoxGeometry(0.08, 0.38, 0.025),
+      new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.5 })
+    );
+    placket.position.set(0, 0.32, 0.14);
+    upperBodyGroup.add(placket);
+  } else if (archetype === 'pekerja_batik') {
+    const batikAccent = new THREE.Mesh(
+      new THREE.BoxGeometry(0.12, 0.48, 0.025),
+      new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.6 })
+    );
+    batikAccent.position.set(0, 0.28, 0.14);
+    upperBodyGroup.add(batikAccent);
   }
 
-  const leftArm = new THREE.Mesh(legGeo, shirtMat);
-  leftArm.scale.set(0.8, 0.85, 0.8);
-  leftArm.position.set(-0.32, 1.35, 0);
-  group.add(leftArm);
+  // 4. Articulated Two-Segment Arms (Shoulder -> Upper Arm -> Elbow -> Forearm -> Hand)
+  const upperArmGeo = new THREE.CapsuleGeometry(0.076, 0.19, 4, 8);
+  upperArmGeo.translate(0, -0.12, 0);
+  const forearmGeo = new THREE.CapsuleGeometry(0.066, 0.19, 4, 8);
+  forearmGeo.translate(0, -0.11, 0);
 
-  const rightArm = new THREE.Mesh(legGeo, shirtMat);
-  rightArm.scale.set(0.8, 0.85, 0.8);
-  rightArm.position.set(0.32, 1.35, 0);
-  group.add(rightArm);
+  const buildNPCArm = (shoulderX: number) => {
+    const shoulderPivot = new THREE.Group();
+    shoulderPivot.position.set(shoulderX, 0.5, 0);
 
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.19, 12, 12), skinMat);
-  head.position.set(0, 1.62, 0);
-  group.add(head);
+    const upperArm = new THREE.Mesh(upperArmGeo, shirtMat);
+    upperArm.castShadow = true;
+    shoulderPivot.add(upperArm);
+
+    const elbowPivot = new THREE.Group();
+    elbowPivot.position.set(0, -0.25, 0);
+
+    const forearm = new THREE.Mesh(
+      forearmGeo,
+      archetype === 'ojol' ? shirtMat : skinMat
+    );
+    forearm.castShadow = true;
+    elbowPivot.add(forearm);
+
+    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 8), skinMat);
+    hand.position.set(0, -0.24, 0);
+    elbowPivot.add(hand);
+
+    shoulderPivot.add(elbowPivot);
+    upperBodyGroup.add(shoulderPivot);
+    return { shoulderPivot, elbowPivot };
+  };
+
+  const leftArmData = buildNPCArm(-0.31);
+  const rightArmData = buildNPCArm(0.31);
+  const leftArm = leftArmData.shoulderPivot;
+  const rightArm = rightArmData.shoulderPivot;
+  const leftElbow = leftArmData.elbowPivot;
+  const rightElbow = rightArmData.elbowPivot;
+
+  // Smartphone held in Right Hand (attached to rightElbow so it moves with the hand!)
+  const phone = new THREE.Mesh(
+    new THREE.BoxGeometry(0.075, 0.14, 0.025),
+    new THREE.MeshStandardMaterial({
+      color: 0x0f172a,
+      emissive: 0x38bdf8,
+      emissiveIntensity: 0.45,
+      roughness: 0.2,
+      metalness: 0.8,
+    })
+  );
+  phone.position.set(0, -0.26, 0.06);
+  phone.visible = false;
+  rightElbow.add(phone);
+
+  // 5. Neck & Expressive Head (Eyes, Eyebrows, Nose, Ears, Smile & Headgear)
+  const neck = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.075, 0.088, 0.12, 8),
+    skinMat
+  );
+  neck.position.set(0, 0.6, 0);
+  upperBodyGroup.add(neck);
+
+  const head = new THREE.Group();
+  head.position.set(0, 0.74, 0);
+
+  const headSphere = new THREE.Mesh(new THREE.SphereGeometry(0.19, 14, 14), skinMat);
+  headSphere.scale.set(0.96, 1.04, 0.98);
+  headSphere.castShadow = true;
+  head.add(headSphere);
+
+  // Ears
+  for (const ex of [-0.18, 0.18]) {
+    const ear = new THREE.Mesh(new THREE.SphereGeometry(0.038, 6, 6), skinMat);
+    ear.scale.set(0.55, 1.1, 0.8);
+    ear.position.set(ex, 0, 0);
+    head.add(ear);
+  }
+
+  // Eyes & Eyebrows
+  for (const ex of [-0.062, 0.062]) {
+    const eye = new THREE.Mesh(
+      new THREE.SphereGeometry(0.022, 6, 6),
+      darkMat
+    );
+    eye.position.set(ex, 0.025, 0.172);
+    head.add(eye);
+
+    const brow = new THREE.Mesh(
+      new THREE.BoxGeometry(0.05, 0.014, 0.015),
+      darkMat
+    );
+    brow.position.set(ex, 0.065, 0.172);
+    head.add(brow);
+  }
+
+  // Nose & Friendly Smile
+  const nose = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.045, 0.035), skinMat);
+  nose.position.set(0, -0.01, 0.185);
+  head.add(nose);
+
+  const smile = new THREE.Mesh(
+    new THREE.BoxGeometry(0.07, 0.016, 0.015),
+    new THREE.MeshBasicMaterial({ color: 0x451a03 })
+  );
+  smile.position.set(0, -0.07, 0.175);
+  head.add(smile);
 
   // Headgear per archetype
   if (archetype === 'ojol') {
     const helmet = new THREE.Mesh(
-      new THREE.SphereGeometry(0.22, 12, 12, 0, Math.PI * 2, 0, Math.PI * 0.68),
-      new THREE.MeshStandardMaterial({ color: 0x16a34a, roughness: 0.3, metalness: 0.2 })
+      new THREE.SphereGeometry(0.215, 14, 12, 0, Math.PI * 2, 0, Math.PI * 0.65),
+      new THREE.MeshStandardMaterial({ color: 0x16a34a, roughness: 0.25, metalness: 0.25 })
     );
-    helmet.position.set(0, 1.64, 0);
-    group.add(helmet);
+    helmet.position.set(0, 0.02, 0);
+    head.add(helmet);
+
+    const peak = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.03, 0.12), darkMat);
+    peak.position.set(0, 0.11, 0.16);
+    peak.rotation.x = 0.15;
+    head.add(peak);
   } else if (archetype === 'santri') {
     // Black Indonesian Peci / Songkok
     const peci = new THREE.Mesh(
-      new THREE.BoxGeometry(0.3, 0.13, 0.34),
+      new THREE.CylinderGeometry(0.18, 0.19, 0.13, 14),
       new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.9 })
     );
-    peci.position.set(0, 1.78, 0);
-    group.add(peci);
-  } else {
-    const capColor = archetype === 'pelajar_sma' ? 0x1e3a8a : 0x1e293b;
-    const cap = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.2, 0.2, 0.1, 12),
-      new THREE.MeshStandardMaterial({ color: capColor, roughness: 0.5 })
+    peci.scale.set(0.95, 1, 1.05);
+    peci.position.set(0, 0.15, 0);
+    head.add(peci);
+  } else if (archetype === 'pelajar_sma') {
+    // Navy blue & white Indonesian SMA school cap (Topi Sekolah SMA)
+    const capCrown = new THREE.Mesh(
+      new THREE.SphereGeometry(0.198, 12, 10, 0, Math.PI * 2, 0, Math.PI * 0.55),
+      new THREE.MeshStandardMaterial({ color: 0x1e3a8a, roughness: 0.6 })
     );
-    cap.position.set(0, 1.76, 0);
-    group.add(cap);
+    capCrown.position.set(0, 0.03, 0);
+    head.add(capCrown);
+
+    const capBrim = new THREE.Mesh(
+      new THREE.BoxGeometry(0.24, 0.025, 0.14),
+      new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.5 })
+    );
+    capBrim.position.set(0, 0.08, 0.16);
+    capBrim.rotation.x = 0.15;
+    head.add(capBrim);
+  } else {
+    // Styled Natural Hair
+    const hair = new THREE.Mesh(
+      new THREE.SphereGeometry(0.2, 12, 10, 0, Math.PI * 2, 0, Math.PI * 0.58),
+      darkMat
+    );
+    hair.position.set(0, 0.03, -0.01);
+    head.add(hair);
   }
 
-  const phone = new THREE.Mesh(
-    new THREE.BoxGeometry(0.08, 0.16, 0.03),
-    new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.2, metalness: 0.8 })
-  );
-  phone.position.set(0, -0.42, 0.08);
-  phone.visible = false;
-  rightArm.add(phone);
+  upperBodyGroup.add(head);
 
-  group.userData.limbs = { leftLeg, rightLeg, leftArm, rightArm, head, phone };
+  group.userData.limbs = {
+    bodyRoot,
+    upperBodyGroup,
+    leftLeg,
+    rightLeg,
+    leftKnee,
+    rightKnee,
+    leftArm,
+    rightArm,
+    leftElbow,
+    rightElbow,
+    head,
+    phone,
+  };
   return group;
 }
 
@@ -1818,17 +2329,32 @@ export function createSekolahNusantara(maxAnisotropy: number): THREE.Group {
 
   const wallMat = new THREE.MeshStandardMaterial({
     color: 0xfef3c7,
-    roughness: 0.65,
+    roughness: 0.62,
+    metalness: 0.04,
+  });
+  const accentWallMat = new THREE.MeshStandardMaterial({
+    color: 0xfde68a,
+    roughness: 0.6,
     metalness: 0.05,
   });
   const whiteTrimMat = new THREE.MeshStandardMaterial({
     color: 0xf8fafc,
-    roughness: 0.5,
+    roughness: 0.45,
   });
+  const stonePlinthMat = new THREE.MeshStandardMaterial({
+    color: 0x475569,
+    roughness: 0.82,
+  });
+  const gentengTex = createGentengClayTexture(maxAnisotropy);
   const gentengRoofMat = new THREE.MeshStandardMaterial({
-    color: 0x991b1b,
-    roughness: 0.68,
+    map: gentengTex,
+    color: 0xb91c1c,
+    roughness: 0.65,
     metalness: 0.08,
+  });
+  const ridgeCapMat = new THREE.MeshStandardMaterial({
+    color: 0x7f1d1d,
+    roughness: 0.55,
   });
   const glassMat = new THREE.MeshPhysicalMaterial({
     color: 0x38bdf8,
@@ -1836,8 +2362,79 @@ export function createSekolahNusantara(maxAnisotropy: number): THREE.Group {
     metalness: 0.2,
     clearcoat: 0.9,
   });
+  const woodDoorMat = new THREE.MeshStandardMaterial({
+    color: 0x78350f,
+    roughness: 0.65,
+  });
+  const goldAccentMat = new THREE.MeshStandardMaterial({
+    color: 0xfacc15,
+    roughness: 0.3,
+    metalness: 0.7,
+  });
 
-  // 1. School Campus Courtyard Paving & Lawn Base (41.6m x 41.6m)
+  // Helper: Build a properly aligned rectangular Hip Roof (Atap Limasan Genteng) with white fascia eaves & ridge beam
+  // By rotating the ConeGeometry in vertex space BEFORE scaling, the rectangular base aligns 100% with X and Z!
+  const createAlignedHipRoof = (
+    widthX: number,
+    depthZ: number,
+    heightY: number
+  ): THREE.Group => {
+    const rGroup = new THREE.Group();
+
+    // 1. White fascia eaves board (Lisplang Putih)
+    const fascia = new THREE.Mesh(
+      new THREE.BoxGeometry(widthX + 0.3, 0.34, depthZ + 0.3),
+      whiteTrimMat
+    );
+    fascia.position.y = 0.17;
+    fascia.castShadow = true;
+    rGroup.add(fascia);
+
+    // 2. Rectangular pyramid hip roof (geometry rotated 45 deg BEFORE scaling X and Z)
+    const pyrGeo = new THREE.ConeGeometry(Math.SQRT1_2, heightY, 4);
+    pyrGeo.rotateY(Math.PI / 4);
+    pyrGeo.translate(0, heightY / 2 + 0.22, 0);
+    pyrGeo.scale(widthX, 1, depthZ);
+    pyrGeo.computeVertexNormals();
+
+    const pyrMesh = new THREE.Mesh(pyrGeo, gentengRoofMat);
+    pyrMesh.castShadow = true;
+    pyrMesh.receiveShadow = true;
+    rGroup.add(pyrMesh);
+
+    // 3. Upper Limasan flat ridge crest (Bubungan Atap Genteng) so long roofs look like authentic Indonesian Limasan roofs
+    const isLongX = widthX >= depthZ;
+    const ridgeLen = isLongX ? widthX * 0.52 : depthZ * 0.52;
+    const ridgePrismGeo = new THREE.ConeGeometry(Math.SQRT1_2, heightY * 0.78, 4);
+    ridgePrismGeo.rotateY(Math.PI / 4);
+    ridgePrismGeo.translate(0, (heightY * 0.78) / 2 + 0.22, 0);
+    ridgePrismGeo.scale(
+      isLongX ? widthX * 0.86 : widthX * 0.72,
+      1,
+      isLongX ? depthZ * 0.72 : depthZ * 0.86
+    );
+    ridgePrismGeo.computeVertexNormals();
+    const upperTier = new THREE.Mesh(ridgePrismGeo, gentengRoofMat);
+    upperTier.position.y = heightY * 0.22;
+    upperTier.castShadow = true;
+    rGroup.add(upperTier);
+
+    // Terracotta ridge beam cap (Nok Genteng)
+    const nok = new THREE.Mesh(
+      new THREE.BoxGeometry(
+        isLongX ? ridgeLen : 0.32,
+        0.24,
+        isLongX ? 0.32 : ridgeLen
+      ),
+      ridgeCapMat
+    );
+    nok.position.y = heightY + 0.18;
+    rGroup.add(nok);
+
+    return rGroup;
+  };
+
+  // 1. School Campus Courtyard Paving & Green Lawn Base (41.6m x 41.6m)
   const campusBase = new THREE.Mesh(
     new THREE.BoxGeometry(41.6, 0.08, 41.6),
     new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.82 })
@@ -1846,36 +2443,97 @@ export function createSekolahNusantara(maxAnisotropy: number): THREE.Group {
   campusBase.receiveShadow = true;
   group.add(campusBase);
 
+  // Green lawn border strips around campus perimeter
+  for (const [lx, lz, lw, ld] of [
+    [0, 17.8, 39.6, 4.2],
+    [-18.8, -1.5, 2.8, 34.0],
+    [18.8, -1.5, 2.8, 34.0],
+  ]) {
+    const lawn = new THREE.Mesh(
+      new THREE.BoxGeometry(lw, 0.09, ld),
+      new THREE.MeshStandardMaterial({ color: 0x15803d, roughness: 0.88 })
+    );
+    lawn.position.set(lx, 0.05, lz);
+    lawn.receiveShadow = true;
+    group.add(lawn);
+  }
+
   // 2. Lapangan Upacara & Lapangan Basket in Front Courtyard (z = -6.5)
   const courtMesh = new THREE.Mesh(
-    new THREE.BoxGeometry(22, 0.08, 13.5),
+    new THREE.BoxGeometry(20.5, 0.08, 12.8),
     new THREE.MeshStandardMaterial({ color: 0x0f766e, roughness: 0.72 })
   );
   courtMesh.position.set(0, 0.09, -6.5);
   courtMesh.receiveShadow = true;
   group.add(courtMesh);
 
-  const courtBorder = new THREE.Mesh(
-    new THREE.RingGeometry(2.2, 2.45, 24),
+  // White court boundary lines & center circle
+  const courtCenterRing = new THREE.Mesh(
+    new THREE.RingGeometry(2.0, 2.22, 24),
     new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide })
   );
-  courtBorder.rotation.x = -Math.PI / 2;
-  courtBorder.position.set(0, 0.14, -6.5);
-  group.add(courtBorder);
+  courtCenterRing.rotation.x = -Math.PI / 2;
+  courtCenterRing.position.set(0, 0.14, -6.5);
+  group.add(courtCenterRing);
 
-  // Tiang Bendera Merah Putih (School Ceremony Flagpole at z = -1.2)
+  const centerLine = new THREE.Mesh(
+    new THREE.BoxGeometry(0.16, 0.02, 12.2),
+    new THREE.MeshBasicMaterial({ color: 0xffffff })
+  );
+  centerLine.position.set(0, 0.14, -6.5);
+  group.add(centerLine);
+
+  // Basketball Hoops (Tiang Ring Basket Sekolah) at West & East ends of the court
+  for (const dir of [-1, 1]) {
+    const hoopGroup = new THREE.Group();
+    hoopGroup.position.set(dir * 9.6, 0, -6.5);
+    hoopGroup.rotation.y = dir > 0 ? -Math.PI / 2 : Math.PI / 2;
+
+    const post = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.1, 0.12, 3.4, 8),
+      stonePlinthMat
+    );
+    post.position.y = 1.7;
+    hoopGroup.add(post);
+
+    const backboard = new THREE.Mesh(
+      new THREE.BoxGeometry(1.5, 1.05, 0.08),
+      whiteTrimMat
+    );
+    backboard.position.set(0, 3.25, 0.45);
+    hoopGroup.add(backboard);
+
+    const rim = new THREE.Mesh(
+      new THREE.TorusGeometry(0.24, 0.03, 8, 16),
+      new THREE.MeshStandardMaterial({ color: 0xea580c, roughness: 0.4 })
+    );
+    rim.rotation.x = Math.PI / 2;
+    rim.position.set(0, 2.95, 0.74);
+    hoopGroup.add(rim);
+
+    group.add(hoopGroup);
+  }
+
+  // Tiang Bendera Merah Putih (School Ceremony Flagpole at z = -0.5)
   const flagPedestal = new THREE.Mesh(
-    new THREE.BoxGeometry(2.4, 0.45, 2.4),
+    new THREE.BoxGeometry(2.6, 0.42, 2.6),
     whiteTrimMat
   );
-  flagPedestal.position.set(0, 0.28, -1.2);
+  flagPedestal.position.set(0, 0.25, -0.5);
   group.add(flagPedestal);
 
+  const flagPedestalStep = new THREE.Mesh(
+    new THREE.BoxGeometry(3.4, 0.18, 3.4),
+    stonePlinthMat
+  );
+  flagPedestalStep.position.set(0, 0.09, -0.5);
+  group.add(flagPedestalStep);
+
   const flagPole = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.09, 0.13, 11.5, 10),
+    new THREE.CylinderGeometry(0.09, 0.13, 11.8, 10),
     whiteTrimMat
   );
-  flagPole.position.set(0, 5.8, -1.2);
+  flagPole.position.set(0, 5.9, -0.5);
   flagPole.castShadow = true;
   group.add(flagPole);
 
@@ -1883,69 +2541,142 @@ export function createSekolahNusantara(maxAnisotropy: number): THREE.Group {
     new THREE.BoxGeometry(2.2, 0.65, 0.06),
     new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.5 })
   );
-  flagRed.position.set(1.1, 10.9, -1.2);
+  flagRed.position.set(1.1, 11.1, -0.5);
   group.add(flagRed);
 
   const flagWhite = new THREE.Mesh(
     new THREE.BoxGeometry(2.2, 0.65, 0.06),
     new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5 })
   );
-  flagWhite.position.set(1.1, 10.25, -1.2);
+  flagWhite.position.set(1.1, 10.45, -0.5);
   group.add(flagWhite);
 
   // 3. Main 2-Story School Building (Gedung Utama di Selatan z = +10.5)
   const mainHall = new THREE.Mesh(
-    new THREE.BoxGeometry(32, 8.6, 8.8),
+    new THREE.BoxGeometry(32.0, 8.4, 8.8),
     wallMat
   );
-  mainHall.position.set(0, 4.35, 10.5);
+  mainHall.position.set(0, 4.25, 10.5);
   mainHall.castShadow = true;
   mainHall.receiveShadow = true;
   group.add(mainHall);
 
-  // Pitched Terracotta Roof (Atap Genteng Merah Khas Sekolah Indonesia)
-  const mainRoof = new THREE.Mesh(
-    new THREE.ConeGeometry(24, 3.8, 4),
-    gentengRoofMat
+  // Stone foundation plinth
+  const mainPlinth = new THREE.Mesh(
+    new THREE.BoxGeometry(32.4, 0.45, 9.2),
+    stonePlinthMat
   );
-  mainRoof.rotation.y = Math.PI / 4;
-  mainRoof.scale.set(1.02, 1, 0.36);
-  mainRoof.position.set(0, 10.5, 10.5);
-  mainRoof.castShadow = true;
+  mainPlinth.position.set(0, 0.22, 10.5);
+  group.add(mainPlinth);
+
+  // Properly Aligned Rectangular Hip Roof over Main Hall (33.8m x 10.6m overhang, 3.6m tall)
+  const mainRoof = createAlignedHipRoof(33.8, 10.6, 3.6);
+  mainRoof.position.set(0, 8.45, 10.5);
   group.add(mainRoof);
 
-  // Classroom Windows along Floor 1 & Floor 2 of Main Hall
+  // Central Front Lobby / Aula Projection (Pendopo / Teras Utama SMAN 1 at x = 0, z = 5.4)
+  const lobbyProjection = new THREE.Mesh(
+    new THREE.BoxGeometry(7.2, 8.6, 2.4),
+    accentWallMat
+  );
+  lobbyProjection.position.set(0, 4.35, 5.6);
+  lobbyProjection.castShadow = true;
+  group.add(lobbyProjection);
+
+  const lobbyRoof = createAlignedHipRoof(8.4, 4.2, 2.3);
+  lobbyRoof.position.set(0, 8.65, 5.5);
+  group.add(lobbyRoof);
+
+  // Golden School Crest & Wall Clock on Central Lobby Pediment
+  const clockDisc = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.75, 0.75, 0.14, 16),
+    whiteTrimMat
+  );
+  clockDisc.rotation.x = Math.PI / 2;
+  clockDisc.position.set(0, 7.2, 4.38);
+  group.add(clockDisc);
+
+  const clockRim = new THREE.Mesh(
+    new THREE.TorusGeometry(0.76, 0.08, 8, 20),
+    goldAccentMat
+  );
+  clockRim.position.set(0, 7.2, 4.44);
+  group.add(clockRim);
+
+  // Double Wooden Main Entrance Doors at Central Lobby
+  const mainDoor = new THREE.Mesh(
+    new THREE.BoxGeometry(2.6, 2.8, 0.18),
+    woodDoorMat
+  );
+  mainDoor.position.set(0, 1.5, 4.38);
+  group.add(mainDoor);
+
+  // Classroom Windows & Doors along Floor 1 & Floor 2 of Main Hall
   for (let wx = -12; wx <= 12; wx += 4) {
-    for (const wy of [2.6, 6.4]) {
+    if (Math.abs(wx) < 2) continue; // Skip center where lobby projection stands
+    for (const wy of [2.5, 6.3]) {
+      const winFrame = new THREE.Mesh(
+        new THREE.BoxGeometry(2.55, 1.65, 0.14),
+        whiteTrimMat
+      );
+      winFrame.position.set(wx, wy, 6.06);
+      group.add(winFrame);
+
       const win = new THREE.Mesh(
-        new THREE.BoxGeometry(2.4, 1.5, 0.16),
+        new THREE.BoxGeometry(2.3, 1.4, 0.18),
         glassMat
       );
-      win.position.set(wx, wy, 6.05);
+      win.position.set(wx, wy, 6.06);
       group.add(win);
     }
   }
 
-  // Second-Floor Balcony Corridor & White Pillars
+  // Second-Floor Balcony Corridor, Parapet Railing & White Pillars
   const balconySlab = new THREE.Mesh(
-    new THREE.BoxGeometry(32.4, 0.4, 2.2),
+    new THREE.BoxGeometry(32.4, 0.36, 2.3),
     whiteTrimMat
   );
-  balconySlab.position.set(0, 4.5, 5.2);
+  balconySlab.position.set(0, 4.45, 5.15);
   group.add(balconySlab);
+
+  const balconyRail = new THREE.Mesh(
+    new THREE.BoxGeometry(32.2, 0.95, 0.18),
+    accentWallMat
+  );
+  balconyRail.position.set(0, 5.05, 4.15);
+  group.add(balconyRail);
+
+  const balconyTopBar = new THREE.Mesh(
+    new THREE.BoxGeometry(32.4, 0.14, 0.26),
+    whiteTrimMat
+  );
+  balconyTopBar.position.set(0, 5.55, 4.15);
+  group.add(balconyTopBar);
+
+  // Overhang Canopy Roof above 2nd-floor corridor
+  const corridorCanopy = new THREE.Mesh(
+    new THREE.BoxGeometry(32.6, 0.22, 2.5),
+    gentengRoofMat
+  );
+  corridorCanopy.position.set(0, 8.32, 5.15);
+  corridorCanopy.rotation.x = 0.08;
+  group.add(corridorCanopy);
 
   for (let px = -14; px <= 14; px += 4) {
     const col = new THREE.Mesh(
-      new THREE.BoxGeometry(0.42, 8.4, 0.42),
+      new THREE.BoxGeometry(0.42, 8.3, 0.42),
       whiteTrimMat
     );
-    col.position.set(px, 4.25, 4.4);
+    col.position.set(px, 4.2, 4.2);
     col.castShadow = true;
     group.add(col);
   }
 
-  // 4. Left & Right Classroom Wings (Leter-U Campus Layout)
+  // 4. Left & Right Classroom Wings (Leter-U Campus Layout at x = ±14.2, z = -1.5)
   for (const sx of [-14.2, 14.2]) {
+    const isLeft = sx < 0;
+    const innerDir = isLeft ? 1 : -1;
+
     const wing = new THREE.Mesh(
       new THREE.BoxGeometry(6.8, 7.2, 16.5),
       wallMat
@@ -1955,18 +2686,238 @@ export function createSekolahNusantara(maxAnisotropy: number): THREE.Group {
     wing.receiveShadow = true;
     group.add(wing);
 
-    const wingRoof = new THREE.Mesh(
-      new THREE.ConeGeometry(13.2, 3.0, 4),
+    const wingPlinth = new THREE.Mesh(
+      new THREE.BoxGeometry(7.1, 0.42, 16.8),
+      stonePlinthMat
+    );
+    wingPlinth.position.set(sx, 0.21, -1.5);
+    group.add(wingPlinth);
+
+    // Properly Aligned Rectangular Hip Roof over Classroom Wing (8.4m x 18.2m overhang, 2.9m tall)
+    const wingRoof = createAlignedHipRoof(8.4, 18.2, 2.9);
+    wingRoof.position.set(sx, 7.25, -1.5);
+    group.add(wingRoof);
+
+    // Covered Veranda Walkway along inner courtyard side of each wing
+    const wingVerandaRoof = new THREE.Mesh(
+      new THREE.BoxGeometry(1.8, 0.2, 16.4),
       gentengRoofMat
     );
-    wingRoof.rotation.y = Math.PI / 4;
-    wingRoof.scale.set(0.45, 1, 0.95);
-    wingRoof.position.set(sx, 8.7, -1.5);
-    wingRoof.castShadow = true;
-    group.add(wingRoof);
+    wingVerandaRoof.position.set(sx + innerDir * 4.0, 3.85, -1.5);
+    wingVerandaRoof.rotation.z = innerDir * -0.14;
+    group.add(wingVerandaRoof);
+
+    // Classroom Windows & Doors facing the inner courtyard
+    for (const wz of [-7.0, -3.0, 1.0, 4.5]) {
+      for (const wy of [2.2, 5.4]) {
+        const wFrame = new THREE.Mesh(
+          new THREE.BoxGeometry(0.14, 1.45, 2.2),
+          whiteTrimMat
+        );
+        wFrame.position.set(sx + innerDir * 3.42, wy, wz);
+        group.add(wFrame);
+
+        const wGlass = new THREE.Mesh(
+          new THREE.BoxGeometry(0.18, 1.25, 1.95),
+          glassMat
+        );
+        wGlass.position.set(sx + innerDir * 3.42, wy, wz);
+        group.add(wGlass);
+      }
+
+      // Veranda support pillars
+      const vCol = new THREE.Mesh(
+        new THREE.BoxGeometry(0.28, 3.8, 0.28),
+        whiteTrimMat
+      );
+      vCol.position.set(sx + innerDir * 4.65, 1.9, wz);
+      group.add(vCol);
+    }
   }
 
-  // 5. Front School Perimeter Fence & Main Gate with Banner (at North edge z = -19.2)
+  // 5. Shady School Trees (Pohon Rindang Ketapang & Mangga Sekolah) with Stone Tree Planters
+  const treeLeafDarkMat = new THREE.MeshStandardMaterial({
+    color: 0x15803d,
+    roughness: 0.75,
+  });
+  const treeLeafLightMat = new THREE.MeshStandardMaterial({
+    color: 0x22c55e,
+    roughness: 0.72,
+  });
+  const trunkMat = new THREE.MeshStandardMaterial({
+    color: 0x5c2b0e,
+    roughness: 0.85,
+  });
+
+  const addSchoolTree = (tx: number, tz: number, scale: number, withPlanter: boolean) => {
+    const tGroup = new THREE.Group();
+    tGroup.position.set(tx, 0, tz);
+
+    if (withPlanter) {
+      const ringWall = new THREE.Mesh(
+        new THREE.CylinderGeometry(1.35, 1.45, 0.42, 12),
+        whiteTrimMat
+      );
+      ringWall.position.y = 0.21;
+      tGroup.add(ringWall);
+
+      const soil = new THREE.Mesh(
+        new THREE.CylinderGeometry(1.18, 1.18, 0.46, 12),
+        new THREE.MeshStandardMaterial({ color: 0x3f2e21, roughness: 0.95 })
+      );
+      soil.position.y = 0.22;
+      tGroup.add(soil);
+    }
+
+    const trunk = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.24 * scale, 0.36 * scale, 3.6 * scale, 8),
+      trunkMat
+    );
+    trunk.position.y = 1.8 * scale;
+    trunk.castShadow = true;
+    tGroup.add(trunk);
+
+    // Layered lush tropical school tree canopy
+    const canopyClusters: [number, number, number, number, boolean][] = [
+      [0, 4.1 * scale, 0, 2.1 * scale, false],
+      [-1.1 * scale, 3.6 * scale, 0.8 * scale, 1.55 * scale, true],
+      [1.1 * scale, 3.7 * scale, -0.7 * scale, 1.6 * scale, false],
+      [0.7 * scale, 3.8 * scale, 1.0 * scale, 1.45 * scale, true],
+      [-0.8 * scale, 3.9 * scale, -1.0 * scale, 1.5 * scale, false],
+      [0, 5.1 * scale, 0, 1.55 * scale, true],
+    ];
+    canopyClusters.forEach(([cx, cy, cz, r, isLight]) => {
+      const leaf = new THREE.Mesh(
+        new THREE.DodecahedronGeometry(r, 1),
+        isLight ? treeLeafLightMat : treeLeafDarkMat
+      );
+      leaf.position.set(cx, cy, cz);
+      leaf.scale.set(1.15, 0.82, 1.15);
+      leaf.castShadow = true;
+      tGroup.add(leaf);
+    });
+
+    group.add(tGroup);
+  };
+
+  // Shady trees flanking the front courtyard, gate corners, and rear garden
+  addSchoolTree(-8.2, -15.2, 1.05, true);
+  addSchoolTree(8.2, -15.2, 1.05, true);
+  addSchoolTree(-18.2, -14.5, 0.95, false);
+  addSchoolTree(18.2, -14.5, 0.95, false);
+  addSchoolTree(-18.2, 12.5, 1.1, false);
+  addSchoolTree(18.2, 12.5, 1.1, false);
+
+  // 6. Colorful School Flower Gardens (Taman Bunga Bougainvillea, Mawar, & Marigold)
+  const bushLeafMat = new THREE.MeshStandardMaterial({
+    color: 0x16a34a,
+    roughness: 0.75,
+  });
+  const flowerPalette = [
+    new THREE.MeshStandardMaterial({ color: 0xf43f5e, roughness: 0.5 }), // Rose red
+    new THREE.MeshStandardMaterial({ color: 0xd946ef, roughness: 0.5 }), // Bougainvillea magenta
+    new THREE.MeshStandardMaterial({ color: 0xfacc15, roughness: 0.5 }), // Marigold yellow
+    new THREE.MeshStandardMaterial({ color: 0xf97316, roughness: 0.5 }), // Hibiscus orange
+    new THREE.MeshStandardMaterial({ color: 0xa855f7, roughness: 0.5 }), // Orchid purple
+  ];
+
+  const addFlowerPlanterBox = (
+    bx: number,
+    bz: number,
+    lenX: number,
+    lenZ: number,
+    seed: number
+  ) => {
+    const pBox = new THREE.Group();
+    pBox.position.set(bx, 0, bz);
+
+    const frame = new THREE.Mesh(
+      new THREE.BoxGeometry(lenX, 0.42, lenZ),
+      whiteTrimMat
+    );
+    frame.position.y = 0.21;
+    frame.castShadow = true;
+    pBox.add(frame);
+
+    const soil = new THREE.Mesh(
+      new THREE.BoxGeometry(lenX - 0.22, 0.45, lenZ - 0.22),
+      new THREE.MeshStandardMaterial({ color: 0x422006, roughness: 0.95 })
+    );
+    soil.position.y = 0.22;
+    pBox.add(soil);
+
+    const isHorizontal = lenX >= lenZ;
+    const span = (isHorizontal ? lenX : lenZ) - 0.8;
+    const steps = Math.max(2, Math.floor(span / 0.85));
+
+    for (let i = 0; i <= steps; i++) {
+      const offset = -span / 2 + (i / steps) * span;
+      const sx = isHorizontal ? offset : 0;
+      const sz = isHorizontal ? 0 : offset;
+
+      // Green shrub base
+      const shrub = new THREE.Mesh(
+        new THREE.DodecahedronGeometry(0.42, 1),
+        bushLeafMat
+      );
+      shrub.position.set(sx, 0.56, sz);
+      shrub.scale.set(1.1, 0.8, 1.1);
+      pBox.add(shrub);
+
+      // Colorful flower blossoms on top & sides of shrub
+      const fMat1 = flowerPalette[(seed + i) % flowerPalette.length];
+      const fMat2 = flowerPalette[(seed + i + 2) % flowerPalette.length];
+
+      const bloom1 = new THREE.Mesh(new THREE.DodecahedronGeometry(0.22, 0), fMat1);
+      bloom1.position.set(sx - 0.12, 0.84, sz + 0.08);
+      pBox.add(bloom1);
+
+      const bloom2 = new THREE.Mesh(new THREE.DodecahedronGeometry(0.2, 0), fMat2);
+      bloom2.position.set(sx + 0.14, 0.8, sz - 0.09);
+      pBox.add(bloom2);
+    }
+
+    group.add(pBox);
+  };
+
+  // Flower beds along both Classroom Wings facing the courtyard
+  addFlowerPlanterBox(-9.5, -5.8, 1.25, 5.2, 0);
+  addFlowerPlanterBox(-9.5, 1.5, 1.25, 5.2, 1);
+  addFlowerPlanterBox(9.5, -5.8, 1.25, 5.2, 2);
+  addFlowerPlanterBox(9.5, 1.5, 1.25, 5.2, 3);
+
+  // Flower beds flanking the Main Hall entrance & Flagpole
+  addFlowerPlanterBox(-6.8, 3.2, 5.0, 1.3, 4);
+  addFlowerPlanterBox(6.8, 3.2, 5.0, 1.3, 1);
+
+  // Flower beds lining the front school fence (North entrance)
+  addFlowerPlanterBox(-12.5, -18.0, 9.5, 1.3, 2);
+  addFlowerPlanterBox(12.5, -18.0, 9.5, 1.3, 3);
+
+  // Decorative Potted Bougainvillea & Gerabah Plants around Kantin & Lobby steps
+  for (const [px, pz, variant] of [
+    [-3.2, 4.0, 'ember_cat'],
+    [3.2, 4.0, 'ember_cat'],
+    [-2.2, -0.5, 'gerabah'],
+    [2.2, -0.5, 'gerabah'],
+    [-4.2, -16.8, 'caladium'],
+    [4.2, -16.8, 'caladium'],
+  ] as [number, number, 'ember_cat' | 'gerabah' | 'caladium'][]) {
+    const pot = createPotBungaKampung(variant);
+    pot.position.set(px, 0, pz);
+    group.add(pot);
+  }
+
+  // Courtyard Student Study Bench (where pelajar_sma sitting NPCs sit at global 28.5..31.5, 72.8 -> local -1.5..1.5, -17.2)
+  const studentBench = new THREE.Mesh(
+    new THREE.BoxGeometry(4.2, 0.44, 0.9),
+    woodDoorMat
+  );
+  studentBench.position.set(0, 0.24, -17.2);
+  studentBench.castShadow = true;
+  group.add(studentBench);
+
+  // 7. Front School Perimeter Fence & Main Gate with Banner (at North edge z = -19.2)
   for (const fx of [-12.5, 12.5]) {
     const fenceWall = new THREE.Mesh(
       new THREE.BoxGeometry(13.5, 1.7, 0.45),
@@ -1975,16 +2926,28 @@ export function createSekolahNusantara(maxAnisotropy: number): THREE.Group {
     fenceWall.position.set(fx, 0.9, -19.2);
     fenceWall.castShadow = true;
     group.add(fenceWall);
+
+    // Terracotta cap on fence wall
+    const fenceCap = new THREE.Mesh(
+      new THREE.BoxGeometry(13.7, 0.18, 0.58),
+      gentengRoofMat
+    );
+    fenceCap.position.set(fx, 1.82, -19.2);
+    group.add(fenceCap);
   }
 
   for (const gx of [-4.6, 4.6]) {
     const gatePillar = new THREE.Mesh(
-      new THREE.BoxGeometry(0.85, 4.4, 0.85),
+      new THREE.BoxGeometry(0.95, 4.5, 0.95),
       gentengRoofMat
     );
     gatePillar.position.set(gx, 2.25, -19.2);
     gatePillar.castShadow = true;
     group.add(gatePillar);
+
+    const pillarCap = createAlignedHipRoof(1.45, 1.45, 0.65);
+    pillarCap.position.set(gx, 4.5, -19.2);
+    group.add(pillarCap);
   }
 
   const schoolBannerTex = createWarungSpandukTexture(
@@ -2000,6 +2963,11 @@ export function createSekolahNusantara(maxAnisotropy: number): THREE.Group {
   );
   schoolSign.position.set(0, 4.35, -19.2);
   group.add(schoolSign);
+
+  // Mini hip roof crowning the main school gate banner
+  const gateBannerRoof = createAlignedHipRoof(10.8, 1.4, 0.9);
+  gateBannerRoof.position.set(0, 5.15, -19.2);
+  group.add(gateBannerRoof);
 
   return group;
 }
@@ -3152,93 +4120,1046 @@ export function createWarungMadura(
 
 export function createPasarTradisional(maxAnisotropy: number): THREE.Group {
   const group = new THREE.Group();
-  group.name = 'PasarTradisional';
+  group.name = 'PasarTradisionalRakyat';
 
-  // 1. Concrete Ground Foundation Pad (26m x 18m)
-  const pad = new THREE.Mesh(
-    new THREE.BoxGeometry(26, 0.15, 18),
-    new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.9 })
-  );
-  pad.position.y = 0.08;
-  pad.receiveShadow = true;
-  group.add(pad);
-
-  // 2. Steel Pillar Structure
-  const pillarMat = new THREE.MeshStandardMaterial({
-    color: 0x1e3a8a,
-    roughness: 0.5,
-    metalness: 0.4,
+  const gentengTex = createGentengClayTexture(maxAnisotropy);
+  const gentengRoofMat = new THREE.MeshStandardMaterial({
+    map: gentengTex,
+    color: 0xb91c1c,
+    roughness: 0.68,
+    metalness: 0.06,
   });
-  for (let x = -11; x <= 11; x += 5.5) {
-    for (let z = -7.5; z <= 7.5; z += 5) {
-      const pillar = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.14, 0.14, 4.4, 8),
+  const greenRoofMat = new THREE.MeshStandardMaterial({
+    color: 0x065f46,
+    roughness: 0.55,
+    metalness: 0.15,
+  });
+  const whiteTrimMat = new THREE.MeshStandardMaterial({
+    color: 0xf8fafc,
+    roughness: 0.45,
+  });
+  const goldTrimMat = new THREE.MeshStandardMaterial({
+    color: 0xfacc15,
+    roughness: 0.35,
+    metalness: 0.5,
+  });
+  const pillarMat = new THREE.MeshStandardMaterial({
+    color: 0x064e3b,
+    roughness: 0.45,
+    metalness: 0.35,
+  });
+  const brickMat = new THREE.MeshStandardMaterial({
+    color: 0x9a3412,
+    roughness: 0.8,
+  });
+  const woodMat = new THREE.MeshStandardMaterial({
+    color: 0x78350f,
+    roughness: 0.78,
+  });
+  const bambooMat = new THREE.MeshStandardMaterial({
+    color: 0xd97706,
+    roughness: 0.82,
+  });
+  const steelMat = new THREE.MeshStandardMaterial({
+    color: 0xcbd5e1,
+    metalness: 0.85,
+    roughness: 0.25,
+  });
+
+  // Helper: Rectangular Hip Roof (Atap Limasan Pasar) with 100% axis-aligned base
+  const makeHipRoof = (
+    wX: number,
+    dZ: number,
+    hY: number,
+    mat: THREE.Material
+  ): THREE.Group => {
+    const rGroup = new THREE.Group();
+    const fascia = new THREE.Mesh(
+      new THREE.BoxGeometry(wX + 0.3, 0.32, dZ + 0.3),
+      whiteTrimMat
+    );
+    fascia.position.y = 0.16;
+    rGroup.add(fascia);
+
+    const pyrGeo = new THREE.ConeGeometry(Math.SQRT1_2, hY, 4);
+    pyrGeo.rotateY(Math.PI / 4);
+    pyrGeo.translate(0, hY / 2 + 0.2, 0);
+    pyrGeo.scale(wX, 1, dZ);
+    pyrGeo.computeVertexNormals();
+
+    const pyr = new THREE.Mesh(pyrGeo, mat);
+    pyr.castShadow = true;
+    pyr.receiveShadow = true;
+    rGroup.add(pyr);
+
+    return rGroup;
+  };
+
+  // 1. Expanded Market Plaza Foundation (36m wide X [-18..+18] x 24m deep Z [-12..+12])
+  const mainPad = new THREE.Mesh(
+    new THREE.BoxGeometry(36.0, 0.14, 24.0),
+    new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.88 })
+  );
+  mainPad.position.y = 0.07;
+  mainPad.receiveShadow = true;
+  group.add(mainPad);
+
+  // Decorative Terracotta & Cream Walk-In Shopping Aisles (Lorong Utama & Lorong Lintas Pasar)
+  const aisleTileMat = new THREE.MeshStandardMaterial({
+    color: 0xfef3c7,
+    roughness: 0.65,
+  });
+  const borderTileMat = new THREE.MeshStandardMaterial({
+    color: 0xb45309,
+    roughness: 0.75,
+  });
+
+  // Central Front-to-Back Promenade (localX: -2.4..+2.4, localZ: -11.6..+11.8)
+  const mainAisle = new THREE.Mesh(
+    new THREE.BoxGeometry(4.6, 0.04, 23.4),
+    aisleTileMat
+  );
+  mainAisle.position.set(0, 0.15, 0.1);
+  mainAisle.receiveShadow = true;
+  group.add(mainAisle);
+
+  // Cross Aisle between Front Los (Sayur/Buah) and Rear Los (Daging/Ikan) at localZ = -1.8
+  const crossAisle = new THREE.Mesh(
+    new THREE.BoxGeometry(33.6, 0.04, 3.4),
+    aisleTileMat
+  );
+  crossAisle.position.set(0, 0.15, -1.8);
+  crossAisle.receiveShadow = true;
+  group.add(crossAisle);
+
+  // Front Outdoor Culinary & Fruit Terrace Apron (localZ = +8.2)
+  const frontTerrace = new THREE.Mesh(
+    new THREE.BoxGeometry(34.4, 0.035, 6.4),
+    borderTileMat
+  );
+  frontTerrace.position.set(0, 0.148, 8.4);
+  frontTerrace.receiveShadow = true;
+  group.add(frontTerrace);
+
+  // 2. Main Covered Market Hall Structure (Gedung Induk Los Pasar: localX [-16.8..+16.8], localZ [-11.2..+5.4])
+  // Sturdy structural columns connecting floor (y=0.14) to roof beam (y=4.6)
+  const colPositionsX = [-15.8, -9.8, -3.2, 3.2, 9.8, 15.8];
+  const colPositionsZ = [-10.4, -4.6, 0.8, 5.2];
+
+  for (const cx of colPositionsX) {
+    for (const cz of colPositionsZ) {
+      // Concrete plinth base
+      const plinth = new THREE.Mesh(
+        new THREE.BoxGeometry(0.46, 0.55, 0.46),
+        brickMat
+      );
+      plinth.position.set(cx, 0.35, cz);
+      group.add(plinth);
+
+      // Steel column up to roof
+      const col = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.16, 0.18, 4.5, 10),
         pillarMat
       );
-      pillar.position.set(x, 2.2, z);
-      pillar.castShadow = true;
-      group.add(pillar);
+      col.position.set(cx, 2.38, cz);
+      col.castShadow = true;
+      group.add(col);
     }
   }
 
-  // 3. Multi-Colored Traditional Tarpaulin Canopy Stalls (Terpal Biru, Oranye, Hijau)
-  const tarpColors = [0x1d4ed8, 0xea580c, 0x16a34a, 0xd97706];
-  for (let tx = -9; tx <= 9; tx += 6) {
-    for (let tz = -5; tz <= 5; tz += 5) {
-      const col = tarpColors[Math.abs(Math.floor(tx + tz)) % tarpColors.length];
-      const tarpMat = new THREE.MeshStandardMaterial({
-        color: col,
-        roughness: 0.65,
-        side: THREE.DoubleSide,
-      });
-      const canopy = new THREE.Mesh(new THREE.ConeGeometry(3.6, 1.2, 4), tarpMat);
-      canopy.rotation.y = Math.PI / 4;
-      canopy.scale.set(1.2, 1, 0.9);
-      canopy.position.set(tx, 4.8, tz);
-      canopy.castShadow = true;
-      group.add(canopy);
-    }
-  }
+  // Perimeter Steel Ring Beam & Trusses at y = 4.55 (centered at localZ = -2.6)
+  const ringBeam = new THREE.Mesh(
+    new THREE.BoxGeometry(33.2, 0.32, 16.4),
+    pillarMat
+  );
+  ringBeam.position.set(0, 4.55, -2.6);
+  group.add(ringBeam);
 
-  // 4. Wooden Fruit & Veggie Vendor Crates ("Kotak Sayur Mayur & Buah")
-  const woodMat = new THREE.MeshStandardMaterial({ color: 0x78350f, roughness: 0.8 });
-  const fruitColors = [0xef4444, 0xf97316, 0x22c55e, 0xfacc15]; // Red tomato, orange, green veg, yellow banana
+  // Two-Tiered Nusantara Market Hall Roof (Atap Bertingkat dengan Ventilasi Clerestory)
+  const lowerHallRoof = makeHipRoof(34.8, 18.0, 2.4, gentengRoofMat);
+  lowerHallRoof.position.set(0, 4.65, -2.6);
+  group.add(lowerHallRoof);
 
-  for (let bx = -8; bx <= 8; bx += 4) {
-    for (let bz = -4; bz <= 4; bz += 4) {
-      const table = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.75, 1.4), woodMat);
-      table.position.set(bx, 0.45, bz);
-      table.castShadow = true;
-      group.add(table);
+  // Skylight Clerestory Louver Box
+  const clerestory = new THREE.Mesh(
+    new THREE.BoxGeometry(20.0, 0.85, 8.8),
+    whiteTrimMat
+  );
+  clerestory.position.set(0, 6.45, -2.6);
+  group.add(clerestory);
 
-      // Produce heaps
-      const pCol = fruitColors[Math.abs(Math.floor(bx * 3 + bz)) % fruitColors.length];
-      const produce = new THREE.Mesh(
-        new THREE.BoxGeometry(2.1, 0.35, 1.1),
-        new THREE.MeshStandardMaterial({ color: pCol, roughness: 0.6 })
+  const upperHallRoof = makeHipRoof(22.4, 10.6, 2.1, gentengRoofMat);
+  upperHallRoof.position.set(0, 6.85, -2.6);
+  group.add(upperHallRoof);
+
+  // Warm Interior Market Hall Ceiling Lamps (glowing warmly for shoppers)
+  const hallBulbMat = new THREE.MeshStandardMaterial({
+    color: 0xfef08a,
+    emissive: 0xf59e0b,
+    emissiveIntensity: 1.4,
+  });
+  for (const lx of [-9.5, 0, 9.5]) {
+    for (const lz of [-6.0, 1.8]) {
+      const lampHood = new THREE.Mesh(
+        new THREE.ConeGeometry(0.35, 0.22, 8),
+        steelMat
       );
-      produce.position.set(bx, 0.95, bz);
-      group.add(produce);
+      lampHood.position.set(lx, 4.35, lz);
+      group.add(lampHood);
+
+      const bulb = new THREE.Mesh(
+        new THREE.SphereGeometry(0.14, 8, 8),
+        hallBulbMat
+      );
+      bulb.position.set(lx, 4.2, lz);
+      group.add(bulb);
     }
   }
 
-  // 5. Grand Entrance Portal Arch with Banner
+  // 3. Grand Gapura & Front Entrance Archway (at localZ = +11.4, facing +Z / World West)
+  for (const gx of [-4.2, 4.2]) {
+    const basePillar = new THREE.Mesh(
+      new THREE.BoxGeometry(1.05, 1.4, 1.05),
+      brickMat
+    );
+    basePillar.position.set(gx, 0.75, 11.2);
+    basePillar.castShadow = true;
+    group.add(basePillar);
+
+    const upperPillar = new THREE.Mesh(
+      new THREE.BoxGeometry(0.78, 4.4, 0.78),
+      pillarMat
+    );
+    upperPillar.position.set(gx, 3.4, 11.2);
+    upperPillar.castShadow = true;
+    group.add(upperPillar);
+
+    const goldRing = new THREE.Mesh(
+      new THREE.BoxGeometry(0.92, 0.22, 0.92),
+      goldTrimMat
+    );
+    goldRing.position.set(gx, 1.5, 11.2);
+    group.add(goldRing);
+  }
+
+  // Gate Crossbeam & Traditional Crown Roof over Main Gate
+  const gateCrossBeam = new THREE.Mesh(
+    new THREE.BoxGeometry(10.6, 0.48, 0.9),
+    pillarMat
+  );
+  gateCrossBeam.position.set(0, 5.45, 11.2);
+  group.add(gateCrossBeam);
+
+  const gateRoof = makeHipRoof(11.4, 2.4, 1.45, greenRoofMat);
+  gateRoof.position.set(0, 5.65, 11.2);
+  group.add(gateRoof);
+
+  // Main Illuminated Banner ("PASAR RAYA TRADISIONAL RAKYAT")
   const bannerTex = createPasarBannerTexture(maxAnisotropy);
   const bannerMat = new THREE.MeshStandardMaterial({
     map: bannerTex,
-    roughness: 0.35,
-    side: THREE.DoubleSide,
+    roughness: 0.3,
   });
-  const bannerMesh = new THREE.Mesh(new THREE.PlaneGeometry(12.5, 2.6), bannerMat);
-  bannerMesh.position.set(0, 5.2, 9.05);
-  group.add(bannerMesh);
+  const bannerBox = new THREE.Mesh(
+    new THREE.BoxGeometry(9.6, 2.35, 0.22),
+    bannerMat
+  );
+  bannerBox.position.set(0, 4.35, 11.35);
+  group.add(bannerBox);
 
-  // Entrance Gateway Pillars
-  for (const gx of [-6.4, 6.4]) {
-    const p = new THREE.Mesh(new THREE.BoxGeometry(0.8, 5.8, 0.8), pillarMat);
-    p.position.set(gx, 2.9, 9.0);
-    p.castShadow = true;
-    group.add(p);
+  // Festive Indonesian Umbul-Umbul Pennants flanking the market front (localZ = +11.6)
+  const umbulColors = [0xdc2626, 0xfacc15, 0x16a34a, 0x2563eb];
+  for (let u = 0; u < 4; u++) {
+    const ux = u < 2 ? -15.5 + u * 4.5 : 11.0 + (u - 2) * 4.5;
+    const pole = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.04, 0.05, 5.2, 6),
+      bambooMat
+    );
+    pole.position.set(ux, 2.6, 11.5);
+    pole.rotation.z = ux < 0 ? 0.06 : -0.06;
+    group.add(pole);
+
+    const flag = new THREE.Mesh(
+      new THREE.BoxGeometry(0.48, 3.6, 0.03),
+      new THREE.MeshStandardMaterial({
+        color: umbulColors[u % umbulColors.length],
+        roughness: 0.6,
+      })
+    );
+    flag.position.set(ux + (ux < 0 ? -0.22 : 0.22), 3.1, 11.5);
+    group.add(flag);
+  }
+
+  // Helper to hang section signboards inside the market
+  const addSectionSign = (
+    x: number,
+    y: number,
+    z: number,
+    title: string,
+    sub: string,
+    bg: string,
+    accent: string
+  ) => {
+    const tex = createLosPasarSignTexture(title, sub, bg, accent, maxAnisotropy);
+    const sign = new THREE.Mesh(
+      new THREE.BoxGeometry(4.4, 1.05, 0.12),
+      new THREE.MeshStandardMaterial({ map: tex, roughness: 0.35 })
+    );
+    sign.position.set(x, y, z);
+    group.add(sign);
+  };
+
+  // ============================================================================
+  // SECTION 1: LOS SAYUR MAYUR & SEMBAKO SEGAR (Blok A1: localX [-14.2..-4.2], localZ [+1.2..+4.2])
+  // ============================================================================
+  addSectionSign(
+    -9.2,
+    3.75,
+    4.6,
+    'LOS SAYUR & SEMBAKO',
+    'BAYAM · CABAI · TOMAT · BERAS PANDAN WANGI',
+    '#14532d',
+    '#facc15'
+  );
+
+  const vegColors = [
+    0x16a34a, // Bayam / Kangkung hijau segar
+    0xdc2626, // Cabai merah keriting & tomat
+    0xf97316, // Wortel Brastagi
+    0x84cc16, // Kubis / Sawi putih hijau muda
+    0x7e22ce, // Terong ungu & bawang merah
+    0xeab308, // Kentang Dieng & jagung manis
+  ];
+
+  for (let vx = -13.2; vx <= -5.2; vx += 4.0) {
+    const stallGroup = new THREE.Group();
+    stallGroup.position.set(vx, 0.14, 2.6);
+
+    // Two-tier wooden vegetable table
+    const tableBase = new THREE.Mesh(
+      new THREE.BoxGeometry(3.2, 0.78, 1.75),
+      woodMat
+    );
+    tableBase.position.y = 0.39;
+    tableBase.castShadow = true;
+    stallGroup.add(tableBase);
+
+    const upperRack = new THREE.Mesh(
+      new THREE.BoxGeometry(3.1, 0.32, 0.82),
+      woodMat
+    );
+    upperRack.position.set(0, 0.92, -0.42);
+    stallGroup.add(upperRack);
+
+    // 6 Woven Bamboo Baskets (Keranjang Sayur) filled with fresh produce
+    for (let b = 0; b < 6; b++) {
+      const bx = -1.0 + (b % 3) * 1.0;
+      const bz = b < 3 ? 0.38 : -0.42;
+      const by = b < 3 ? 0.84 : 1.14;
+
+      const basket = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.38, 0.3, 0.16, 10),
+        bambooMat
+      );
+      basket.position.set(bx, by, bz);
+      stallGroup.add(basket);
+
+      const vMat = new THREE.MeshStandardMaterial({
+        color: vegColors[(b + Math.abs(Math.round(vx))) % vegColors.length],
+        roughness: 0.55,
+      });
+      for (let m = 0; m < 4; m++) {
+        const morsel = new THREE.Mesh(
+          new THREE.DodecahedronGeometry(0.14, 1),
+          vMat
+        );
+        morsel.position.set(
+          bx + ((m % 2) - 0.5) * 0.18,
+          by + 0.1,
+          bz + (Math.floor(m / 2) - 0.5) * 0.18
+        );
+        stallGroup.add(morsel);
+      }
+    }
+
+    // Classic Green Indonesian Market Scale (Timbangan Bebek Pasar)
+    const scaleBase = new THREE.Mesh(
+      new THREE.BoxGeometry(0.32, 0.24, 0.18),
+      new THREE.MeshStandardMaterial({ color: 0x065f46, metalness: 0.5, roughness: 0.4 })
+    );
+    scaleBase.position.set(1.25, 0.9, 0.45);
+    stallGroup.add(scaleBase);
+
+    const scalePan = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.16, 0.12, 0.06, 10),
+      goldTrimMat
+    );
+    scalePan.position.set(1.12, 1.06, 0.45);
+    stallGroup.add(scalePan);
+
+    // Burlap Sacks of Rice (Karung Beras 25kg) stacked in front of the table
+    const sackMat = new THREE.MeshStandardMaterial({
+      color: 0xfef3c7,
+      roughness: 0.9,
+    });
+    for (let s = 0; s < 2; s++) {
+      const sack = new THREE.Mesh(
+        new THREE.BoxGeometry(0.58, 0.32, 0.42),
+        sackMat
+      );
+      sack.position.set(-1.1 + s * 0.65, 0.16, 1.15);
+      stallGroup.add(sack);
+    }
+
+    group.add(stallGroup);
+  }
+
+  // ============================================================================
+  // SECTION 2: LOS BUAH-BUAHAN SEGAR NUSANTARA (Blok A2: localX [+4.2..+14.2], localZ [+1.2..+4.2])
+  // ============================================================================
+  addSectionSign(
+    9.2,
+    3.75,
+    4.6,
+    'LOS BUAH TROPIS SEGAR',
+    'SEMANGKA · PISANG · MANGGA · DURIAN · JERUK',
+    '#b45309',
+    '#fef08a'
+  );
+
+  const watermelonMat = new THREE.MeshStandardMaterial({ color: 0x15803d, roughness: 0.35 });
+  const orangeMat = new THREE.MeshStandardMaterial({ color: 0xf97316, roughness: 0.4 });
+  const mangoMat = new THREE.MeshStandardMaterial({ color: 0xfacc15, roughness: 0.45 });
+  const appleMat = new THREE.MeshStandardMaterial({ color: 0xe11d48, roughness: 0.35 });
+  const durianMat = new THREE.MeshStandardMaterial({ color: 0x65a30d, roughness: 0.85 });
+
+  for (let fx = 5.2; fx <= 13.2; fx += 4.0) {
+    const fruitStall = new THREE.Group();
+    fruitStall.position.set(fx, 0.14, 2.6);
+
+    const counter = new THREE.Mesh(
+      new THREE.BoxGeometry(3.2, 0.78, 1.75),
+      woodMat
+    );
+    counter.position.y = 0.39;
+    counter.castShadow = true;
+    fruitStall.add(counter);
+
+    // Overhead wooden rack for hanging banana bunches (Sisir & Tandan Pisang Raja)
+    for (const px of [-1.4, 1.4]) {
+      const post = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.05, 0.05, 1.45, 6),
+        woodMat
+      );
+      post.position.set(px, 1.45, 0.35);
+      fruitStall.add(post);
+    }
+    const topBar = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.04, 0.04, 3.0, 6),
+      woodMat
+    );
+    topBar.rotation.z = Math.PI / 2;
+    topBar.position.set(0, 2.15, 0.35);
+    fruitStall.add(topBar);
+
+    // Hanging Yellow Banana Bunches
+    for (const bx of [-0.9, 0, 0.9]) {
+      const bunch = new THREE.Mesh(
+        new THREE.CapsuleGeometry(0.11, 0.22, 4, 8),
+        mangoMat
+      );
+      bunch.position.set(bx, 1.92, 0.35);
+      fruitStall.add(bunch);
+    }
+
+    // Pyramids of Watermelons, Oranges, Apples & Spiky Durians on the table
+    for (let w = 0; w < 4; w++) {
+      const melon = new THREE.Mesh(
+        new THREE.SphereGeometry(0.22, 10, 10),
+        watermelonMat
+      );
+      melon.scale.set(1.2, 0.95, 1.0);
+      melon.position.set(-1.05 + (w % 2) * 0.46, 0.96, -0.3 + Math.floor(w / 2) * 0.45);
+      fruitStall.add(melon);
+    }
+    for (let o = 0; o < 6; o++) {
+      const fruit = new THREE.Mesh(
+        new THREE.SphereGeometry(0.14, 8, 8),
+        o % 2 === 0 ? orangeMat : appleMat
+      );
+      fruit.position.set(-0.1 + (o % 3) * 0.3, 0.9, -0.25 + Math.floor(o / 3) * 0.35);
+      fruitStall.add(fruit);
+    }
+    for (let d = 0; d < 3; d++) {
+      const durian = new THREE.Mesh(
+        new THREE.DodecahedronGeometry(0.21, 0),
+        durianMat
+      );
+      durian.position.set(0.95 + (d % 2) * 0.35, 0.96, -0.2 + Math.floor(d / 2) * 0.4);
+      fruitStall.add(durian);
+    }
+
+    group.add(fruitStall);
+  }
+
+  // ============================================================================
+  // SECTION 3: LOS DAGING SAPI & AYAM POTONG (Blok B1: localX [-14.2..-4.2], localZ [-7.5..-4.5])
+  // ============================================================================
+  addSectionSign(
+    -9.2,
+    3.75,
+    -3.8,
+    'LOS DAGING & AYAM POTONG',
+    'DAGING SAPI SEGAR · AYAM KAMPUNG · IGA & BAKSO',
+    '#991b1b',
+    '#fef08a'
+  );
+
+  const ceramicWhiteMat = new THREE.MeshStandardMaterial({
+    color: 0xf8fafc,
+    roughness: 0.25,
+  });
+  const beefMat = new THREE.MeshStandardMaterial({
+    color: 0xb91c1c,
+    roughness: 0.45,
+  });
+  const fatTrimMat = new THREE.MeshStandardMaterial({
+    color: 0xfecdd3,
+    roughness: 0.5,
+  });
+  const chickenMat = new THREE.MeshStandardMaterial({
+    color: 0xfde68a,
+    roughness: 0.45,
+  });
+
+  for (let mx = -13.2; mx <= -5.2; mx += 4.0) {
+    const meatStall = new THREE.Group();
+    meatStall.position.set(mx, 0.14, -6.0);
+
+    // White Ceramic Butcher Counter (Meja Keramik Los Daging)
+    const counter = new THREE.Mesh(
+      new THREE.BoxGeometry(3.2, 0.85, 1.65),
+      ceramicWhiteMat
+    );
+    counter.position.y = 0.425;
+    counter.castShadow = true;
+    meatStall.add(counter);
+
+    // Red butcher front tile stripe
+    const redStripe = new THREE.Mesh(
+      new THREE.BoxGeometry(3.24, 0.24, 1.68),
+      beefMat
+    );
+    redStripe.position.y = 0.72;
+    meatStall.add(redStripe);
+
+    // Heavy Round Tamarind Wood Chopping Block (Talenan Kayu Asem) & Meat Cleaver
+    const choppingBlock = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.28, 0.28, 0.18, 12),
+      woodMat
+    );
+    choppingBlock.position.set(-0.9, 0.94, 0.25);
+    meatStall.add(choppingBlock);
+
+    // Stainless Steel Meat Hanging Rack with Hanging Beef Cuts & Whole Chickens
+    for (const px of [-1.35, 1.35]) {
+      const rackPost = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.04, 0.04, 1.35, 8),
+        steelMat
+      );
+      rackPost.position.set(px, 1.5, -0.2);
+      meatStall.add(rackPost);
+    }
+    const meatRail = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.035, 0.035, 2.8, 8),
+      steelMat
+    );
+    meatRail.rotation.z = Math.PI / 2;
+    meatRail.position.set(0, 2.15, -0.2);
+    meatStall.add(meatRail);
+
+    // Hanging Beef Cuts
+    for (const hx of [-0.95, -0.35]) {
+      const beefCut = new THREE.Mesh(
+        new THREE.CapsuleGeometry(0.12, 0.34, 4, 8),
+        beefMat
+      );
+      beefCut.position.set(hx, 1.78, -0.2);
+      meatStall.add(beefCut);
+
+      const marbling = new THREE.Mesh(
+        new THREE.BoxGeometry(0.25, 0.08, 0.25),
+        fatTrimMat
+      );
+      marbling.position.set(hx, 1.82, -0.2);
+      meatStall.add(marbling);
+    }
+
+    // Whole Dressed Chickens on the counter & hanging
+    for (const cx of [0.35, 0.95]) {
+      const chicken = new THREE.Mesh(
+        new THREE.SphereGeometry(0.2, 8, 8),
+        chickenMat
+      );
+      chicken.scale.set(0.9, 1.25, 0.85);
+      chicken.position.set(cx, 1.0, 0.2);
+      meatStall.add(chicken);
+    }
+
+    group.add(meatStall);
+  }
+
+  // ============================================================================
+  // SECTION 4: LOS IKAN LAUT & HASIL TAMBAK SEGAR (Blok B2: localX [+4.2..+14.2], localZ [-7.5..-4.5])
+  // ============================================================================
+  addSectionSign(
+    9.2,
+    3.75,
+    -3.8,
+    'LOS IKAN LAUT & TAMBAK',
+    'IKAN BANDENG · TONGKOL · KAKAP · UDANG & CUMI',
+    '#0369a1',
+    '#bae6fd'
+  );
+
+  const ceramicBlueMat = new THREE.MeshStandardMaterial({
+    color: 0x0284c7,
+    roughness: 0.3,
+  });
+  const iceBedMat = new THREE.MeshStandardMaterial({
+    color: 0xe0f2fe,
+    roughness: 0.2,
+  });
+  const silverFishMat = new THREE.MeshStandardMaterial({
+    color: 0x94a3b8,
+    metalness: 0.75,
+    roughness: 0.25,
+  });
+  const redSnapperMat = new THREE.MeshStandardMaterial({
+    color: 0xf43f5e,
+    metalness: 0.35,
+    roughness: 0.3,
+  });
+
+  for (let ix = 5.2; ix <= 13.2; ix += 4.0) {
+    const fishStall = new THREE.Group();
+    fishStall.position.set(ix, 0.14, -6.0);
+
+    // Blue Tiled Wet-Market Fish Counter
+    const counter = new THREE.Mesh(
+      new THREE.BoxGeometry(3.2, 0.82, 1.65),
+      ceramicBlueMat
+    );
+    counter.position.y = 0.41;
+    counter.castShadow = true;
+    fishStall.add(counter);
+
+    // White Crushed Ice Display Trays (Hamparan Es Batu Ikan)
+    for (const tx of [-0.75, 0.75]) {
+      const iceTray = new THREE.Mesh(
+        new THREE.BoxGeometry(1.35, 0.12, 1.25),
+        iceBedMat
+      );
+      iceTray.position.set(tx, 0.86, 0);
+      fishStall.add(iceTray);
+
+      // Neatly lined rows of fresh fish on the ice
+      for (let f = 0; f < 4; f++) {
+        const fish = new THREE.Mesh(
+          new THREE.CapsuleGeometry(0.065, 0.28, 4, 8),
+          tx < 0 ? silverFishMat : redSnapperMat
+        );
+        fish.rotation.x = Math.PI / 2;
+        fish.scale.set(0.75, 1.0, 1.2);
+        fish.position.set(tx - 0.42 + f * 0.28, 0.95, 0);
+        fishStall.add(fish);
+      }
+    }
+
+    // Insulated Blue Cooler Box (Box Es Pendingin Ikan) beside the stall
+    const coolerBox = new THREE.Mesh(
+      new THREE.BoxGeometry(0.85, 0.62, 0.58),
+      new THREE.MeshStandardMaterial({ color: 0x1d4ed8, roughness: 0.4 })
+    );
+    coolerBox.position.set(1.25, 0.31, 1.15);
+    fishStall.add(coolerBox);
+
+    const coolerLid = new THREE.Mesh(
+      new THREE.BoxGeometry(0.88, 0.08, 0.6),
+      ceramicWhiteMat
+    );
+    coolerLid.position.set(1.25, 0.65, 1.15);
+    fishStall.add(coolerLid);
+
+    group.add(fishStall);
+  }
+
+  // ============================================================================
+  // SECTION 5: LOS BUMBU DAPUR, REMPAH, TEMPE & TAHU (Center Rear: localX [0], localZ [-8.5])
+  // ============================================================================
+  addSectionSign(
+    0,
+    3.75,
+    -6.8,
+    'LOS BUMBU REMPAH & JAMU',
+    'BAWANG · KUNYIT · JAHE · PETE · TEMPE & TAHU',
+    '#78350f',
+    '#fde047'
+  );
+
+  const spiceStall = new THREE.Group();
+  spiceStall.position.set(0, 0.14, -8.4);
+
+  const spiceTable = new THREE.Mesh(
+    new THREE.BoxGeometry(4.4, 0.8, 1.65),
+    woodMat
+  );
+  spiceTable.position.y = 0.4;
+  spiceTable.castShadow = true;
+  spiceStall.add(spiceTable);
+
+  // Round Woven Bamboo Tampah Trays of Indonesian Spices (Kunyit, Jahe, Bawang Merah, Bawang Putih, Kemiri)
+  const spicePalette = [0xfacc15, 0xd97706, 0x9f1239, 0xf8fafc, 0x15803d];
+  for (let s = 0; s < 5; s++) {
+    const sx = -1.6 + s * 0.8;
+    const tampah = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.34, 0.32, 0.06, 12),
+      bambooMat
+    );
+    tampah.position.set(sx, 0.84, 0.15);
+    spiceStall.add(tampah);
+
+    const spiceHeap = new THREE.Mesh(
+      new THREE.ConeGeometry(0.28, 0.22, 10),
+      new THREE.MeshStandardMaterial({ color: spicePalette[s], roughness: 0.7 })
+    );
+    spiceHeap.position.set(sx, 0.96, 0.15);
+    spiceStall.add(spiceHeap);
+  }
+
+  // Hanging Green Petai Strings (Untaian Papan Pete Segar) & Garlic Braids
+  const peteMat = new THREE.MeshStandardMaterial({ color: 0x65a30d, roughness: 0.5 });
+  for (let p = 0; p < 5; p++) {
+    const peteStrand = new THREE.Mesh(
+      new THREE.BoxGeometry(0.08, 0.65, 0.03),
+      peteMat
+    );
+    peteStrand.position.set(-1.2 + p * 0.6, 1.75, 0.6);
+    spiceStall.add(peteStrand);
+  }
+
+  group.add(spiceStall);
+
+  // ============================================================================
+  // SECTION 6: FRONT OUTDOOR TERRACE — WARUNG JAJAN PASAR & DAWET AYU + KIOS BUAH SEGAR
+  // ============================================================================
+  // 6A. Warung Kuliner Jajan Pasar, Kue Tradisional & Es Dawet Ayu (North-Front Terrace: localX = -8.5, localZ = +8.2)
+  const jajanStall = new THREE.Group();
+  jajanStall.position.set(-8.5, 0.15, 8.2);
+
+  // Striped Green-Yellow Traditional Canopy Tent
+  for (const [px, pz] of [
+    [-2.4, -1.5],
+    [2.4, -1.5],
+    [-2.4, 1.5],
+    [2.4, 1.5],
+  ]) {
+    const tPole = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.06, 0.06, 2.9, 8),
+      steelMat
+    );
+    tPole.position.set(px, 1.45, pz);
+    jajanStall.add(tPole);
+  }
+  const jajanRoof = makeHipRoof(5.4, 3.6, 1.15, greenRoofMat);
+  jajanRoof.position.set(0, 2.85, 0);
+  jajanStall.add(jajanRoof);
+
+  // Jajan Pasar Counter & Glass Showcase
+  const jajanCounter = new THREE.Mesh(
+    new THREE.BoxGeometry(4.4, 0.82, 1.25),
+    woodMat
+  );
+  jajanCounter.position.set(0, 0.41, -0.35);
+  jajanCounter.castShadow = true;
+  jajanStall.add(jajanCounter);
+
+  // Trays of colorful Indonesian Kue Basah (Klepon Hijau, Kue Lapis Merah-Putih, Onde-Onde)
+  const kueColors = [0x22c55e, 0xf43f5e, 0xfacc15, 0xa855f7];
+  for (let k = 0; k < 4; k++) {
+    const tray = new THREE.Mesh(
+      new THREE.BoxGeometry(0.65, 0.14, 0.55),
+      new THREE.MeshStandardMaterial({ color: kueColors[k], roughness: 0.45 })
+    );
+    tray.position.set(-1.4 + k * 0.72, 0.9, -0.35);
+    jajanStall.add(tray);
+  }
+
+  // Twin Terracotta Gentong Jars for Es Dawet Ayu Banjarnegara (Santan & Gula Aren)
+  const gentongMat = new THREE.MeshStandardMaterial({ color: 0x9a3412, roughness: 0.65 });
+  for (const gx of [1.2, 1.75]) {
+    const gentong = new THREE.Mesh(
+      new THREE.SphereGeometry(0.24, 10, 10),
+      gentongMat
+    );
+    gentong.scale.set(1, 1.15, 1);
+    gentong.position.set(gx, 1.02, -0.35);
+    jajanStall.add(gentong);
+  }
+
+  // Long Wooden Dining Bench for Shoppers (at localZ = +1.15, i.e., worldX = 149.2, worldZ = -58.5)
+  const jajanBench = new THREE.Mesh(
+    new THREE.BoxGeometry(3.8, 0.42, 0.48),
+    woodMat
+  );
+  jajanBench.position.set(0, 0.21, 1.15);
+  jajanStall.add(jajanBench);
+
+  group.add(jajanStall);
+
+  // 6B. Kios Buah Tropis & Jamu Segar Bu Rahayu (South-Front Terrace: localX = +8.5, localZ = +8.2)
+  const buahFrontStall = new THREE.Group();
+  buahFrontStall.position.set(8.5, 0.15, 8.2);
+
+  for (const [px, pz] of [
+    [-2.4, -1.5],
+    [2.4, -1.5],
+    [-2.4, 1.5],
+    [2.4, 1.5],
+  ]) {
+    const tPole = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.06, 0.06, 2.9, 8),
+      steelMat
+    );
+    tPole.position.set(px, 1.45, pz);
+    buahFrontStall.add(tPole);
+  }
+  const buahRoof = makeHipRoof(
+    5.4,
+    3.6,
+    1.15,
+    new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.6 })
+  );
+  buahRoof.position.set(0, 2.85, 0);
+  buahFrontStall.add(buahRoof);
+
+  const buahCounter = new THREE.Mesh(
+    new THREE.BoxGeometry(4.4, 0.82, 1.35),
+    woodMat
+  );
+  buahCounter.position.set(0, 0.41, -0.2);
+  buahCounter.castShadow = true;
+  buahFrontStall.add(buahCounter);
+
+  // Colorful Baskets of Tropical Fruits & Jamu Kunyit Asam / Beras Kencur Bottles
+  for (let b = 0; b < 5; b++) {
+    const bx = -1.5 + b * 0.75;
+    const crate = new THREE.Mesh(
+      new THREE.BoxGeometry(0.62, 0.22, 0.75),
+      bambooMat
+    );
+    crate.position.set(bx, 0.92, -0.2);
+    buahFrontStall.add(crate);
+
+    const fruitMound = new THREE.Mesh(
+      new THREE.SphereGeometry(0.24, 8, 8),
+      b % 2 === 0 ? mangoMat : b === 1 ? watermelonMat : appleMat
+    );
+    fruitMound.scale.set(1.1, 0.7, 1.1);
+    fruitMound.position.set(bx, 1.08, -0.2);
+    buahFrontStall.add(fruitMound);
+  }
+
+  group.add(buahFrontStall);
+
+  return group;
+}
+
+/**
+ * Deretan Kios Pasar Barat (Blok B: Kios Pakaian Batik, Warung Ikan/Ayam Bakar Pasar & Grosir Sembako)
+ * Placed on the West side of Gang Pasar (worldX = 134.0, worldZ = -50.0, facing East toward the main market hall)
+ */
+export function createKiosPasarBarat(maxAnisotropy: number): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'KiosPasarBaratBlokB';
+
+  const gentengTex = createGentengClayTexture(maxAnisotropy);
+  const gentengMat = new THREE.MeshStandardMaterial({
+    map: gentengTex,
+    color: 0xb91c1c,
+    roughness: 0.68,
+  });
+  const wallCreamMat = new THREE.MeshStandardMaterial({
+    color: 0xfef3c7,
+    roughness: 0.72,
+  });
+  const trimGreenMat = new THREE.MeshStandardMaterial({
+    color: 0x065f46,
+    roughness: 0.55,
+  });
+  const woodMat = new THREE.MeshStandardMaterial({
+    color: 0x78350f,
+    roughness: 0.78,
+  });
+  const steelMat = new THREE.MeshStandardMaterial({
+    color: 0x94a3b8,
+    metalness: 0.7,
+    roughness: 0.3,
+  });
+
+  // 1. Concrete Foundation Apron (24m wide X [-12..+12] x 6.4m deep Z [-3.2..+3.2])
+  const pad = new THREE.Mesh(
+    new THREE.BoxGeometry(24.0, 0.14, 6.4),
+    new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.88 })
+  );
+  pad.position.y = 0.07;
+  pad.receiveShadow = true;
+  group.add(pad);
+
+  // 2. Main Shophouse Row Building (3 Connected Market Kiosks: Batik/Pakaian, Kuliner Bakar, Grosir Sembako)
+  const body = new THREE.Mesh(
+    new THREE.BoxGeometry(22.4, 3.6, 3.8),
+    wallCreamMat
+  );
+  body.position.set(0, 1.94, -0.9);
+  body.castShadow = true;
+  body.receiveShadow = true;
+  group.add(body);
+
+  // Partition pillars between the 3 kiosks
+  for (const px of [-11.1, -3.7, 3.7, 11.1]) {
+    const pil = new THREE.Mesh(
+      new THREE.BoxGeometry(0.38, 3.7, 4.0),
+      trimGreenMat
+    );
+    pil.position.set(px, 1.98, -0.9);
+    group.add(pil);
+  }
+
+  // Aligned Pitched Hip Roof over the 22.4m Kiosk Row
+  const pyrGeo = new THREE.ConeGeometry(Math.SQRT1_2, 1.85, 4);
+  pyrGeo.rotateY(Math.PI / 4);
+  pyrGeo.translate(0, 1.85 / 2, 0);
+  pyrGeo.scale(23.4, 1, 4.8);
+  pyrGeo.computeVertexNormals();
+  const roof = new THREE.Mesh(pyrGeo, gentengMat);
+  roof.position.set(0, 3.74, -0.9);
+  roof.castShadow = true;
+  group.add(roof);
+
+  // Front Shade Awning over the Kiosk Terrace (+Z)
+  const awning = new THREE.Mesh(
+    new THREE.BoxGeometry(22.8, 0.14, 2.4),
+    trimGreenMat
+  );
+  awning.rotation.x = 0.16;
+  awning.position.set(0, 3.15, 1.8);
+  awning.castShadow = true;
+  group.add(awning);
+
+  for (const px of [-10.8, -3.6, 3.6, 10.8]) {
+    const aPole = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.06, 0.06, 2.95, 8),
+      steelMat
+    );
+    aPole.position.set(px, 1.52, 2.75);
+    group.add(aPole);
+  }
+
+  // Signboards for the 3 Kiosks
+  const kioskSigns: [number, string, string, string, string][] = [
+    [-7.4, 'KIOS BATIK & SANDANG', 'BATIK NUSANTARA · KEBAYA · SARUNG TENUN', '#4c1d95', '#fde047'],
+    [0, 'WARUNG BAKAR HAJI ROZAK', 'IKAN LAUT BAKAR · AYAM BUMBU RUJAK · SATE', '#9a3412', '#fef08a'],
+    [7.4, 'GROSIR SEMBAKO & BERAS', 'BERAS KARUNG · MINYAK · KERUPUK · REMPAH', '#065f46', '#facc15'],
+  ];
+  for (const [sx, title, sub, bg, acc] of kioskSigns) {
+    const tex = createLosPasarSignTexture(title, sub, bg, acc, maxAnisotropy);
+    const sMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(6.4, 1.05, 0.14),
+      new THREE.MeshStandardMaterial({ map: tex, roughness: 0.35 })
+    );
+    sMesh.position.set(sx, 3.65, 1.15);
+    group.add(sMesh);
+  }
+
+  // Kiosk 1 Props (x = -7.4): Hanging Batik Shirts, Sarongs & Mannequin Display
+  const batikColors = [0xd97706, 0x2563eb, 0xdc2626, 0x16a34a, 0x9333ea];
+  const clothesBar = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.03, 0.03, 5.6, 6),
+    steelMat
+  );
+  clothesBar.rotation.z = Math.PI / 2;
+  clothesBar.position.set(-7.4, 2.25, 1.45);
+  group.add(clothesBar);
+
+  for (let c = 0; c < 7; c++) {
+    const garment = new THREE.Mesh(
+      new THREE.BoxGeometry(0.55, 0.78, 0.08),
+      new THREE.MeshStandardMaterial({
+        color: batikColors[c % batikColors.length],
+        roughness: 0.7,
+      })
+    );
+    garment.position.set(-9.8 + c * 0.8, 1.8, 1.45);
+    group.add(garment);
+  }
+
+  // Kiosk 2 Props (x = 0): Smoking Fish/Chicken Grill Counter & Dining Bench
+  const grillCounter = new THREE.Mesh(
+    new THREE.BoxGeometry(4.2, 0.85, 1.1),
+    woodMat
+  );
+  grillCounter.position.set(0, 0.56, 1.45);
+  group.add(grillCounter);
+
+  const charcoalGrill = new THREE.Mesh(
+    new THREE.BoxGeometry(1.4, 0.28, 0.65),
+    new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.6 })
+  );
+  charcoalGrill.position.set(-1.1, 1.12, 1.45);
+  group.add(charcoalGrill);
+
+  const embers = new THREE.Mesh(
+    new THREE.BoxGeometry(1.2, 0.06, 0.5),
+    new THREE.MeshStandardMaterial({
+      color: 0xf97316,
+      emissive: 0xea580c,
+      emissiveIntensity: 1.5,
+    })
+  );
+  embers.position.set(-1.1, 1.27, 1.45);
+  group.add(embers);
+
+  const diningBench = new THREE.Mesh(
+    new THREE.BoxGeometry(3.4, 0.42, 0.46),
+    woodMat
+  );
+  diningBench.position.set(0.4, 0.35, 2.55);
+  group.add(diningBench);
+
+  // Kiosk 3 Props (x = +7.4): Stacked Rice Sacks, Blue Cracker Tins & Gas Cylinders
+  const sackMat = new THREE.MeshStandardMaterial({ color: 0xfef3c7, roughness: 0.9 });
+  for (let r = 0; r < 4; r++) {
+    const sack = new THREE.Mesh(
+      new THREE.BoxGeometry(0.75, 0.35, 0.52),
+      sackMat
+    );
+    sack.position.set(5.4 + (r % 2) * 0.85, 0.32 + Math.floor(r / 2) * 0.34, 1.65);
+    group.add(sack);
+  }
+
+  const tinMat = new THREE.MeshStandardMaterial({
+    color: 0x0284c7,
+    metalness: 0.55,
+    roughness: 0.3,
+  });
+  for (let t = 0; t < 3; t++) {
+    const tin = new THREE.Mesh(
+      new THREE.BoxGeometry(0.44, 0.58, 0.44),
+      tinMat
+    );
+    tin.position.set(7.8 + t * 0.6, 0.43, 1.65);
+    group.add(tin);
   }
 
   return group;
@@ -3499,6 +5420,11 @@ export type VendorType =
   | 'hutan'
   | 'pos_kamling'
   | 'pasar'
+  | 'pasar_buah'
+  | 'pasar_daging'
+  | 'pasar_ikan'
+  | 'pasar_bumbu'
+  | 'pasar_pakaian'
   | 'madura'
   | 'toko_sembako'
   | 'warkop'
@@ -3510,29 +5436,37 @@ export function createVendorNPC(type: VendorType): THREE.Group {
   group.name = `VendorNPC_${type}`;
   group.add(createContactShadow(1.1, 1.1));
 
-  const skinMat = new THREE.MeshStandardMaterial({ color: 0xd49464, roughness: 0.7 });
+  const bodyRoot = new THREE.Group();
+  group.add(bodyRoot);
+
+  const skinMat = new THREE.MeshStandardMaterial({ color: 0xd49464, roughness: 0.65 });
+  const darkMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.75 });
+  const shoeMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.5 });
 
   let shirtColor = 0xf8fafc;
   let pantsColor = 0x1e293b;
   let apronColor = 0x15803d;
   let hasApron = true;
-  let headwear: 'peci' | 'cap' | 'caping' | 'udeng' | 'hair' = 'peci';
+  let headwear: 'peci' | 'cap' | 'caping' | 'udeng' | 'hair' | 'hijab' = 'peci';
+  let hasMustache = false;
 
   if (type === 'pecel_lele') {
     shirtColor = 0xfef08a; // Kaos kuning santai
     pantsColor = 0x1e293b;
     apronColor = 0x15803d; // Celemek hijau khas Lamongan
     headwear = 'peci';
+    hasMustache = true;
   } else if (type === 'bakso') {
     shirtColor = 0xf8fafc;
     pantsColor = 0x334155;
     apronColor = 0xb91c1c; // Celemek merah kuah bakso
     headwear = 'peci';
+    hasMustache = true;
   } else if (type === 'indoalfa') {
     shirtColor = 0x2563eb; // Seragam biru-merah minimarket
     pantsColor = 0x0f172a;
     apronColor = 0xdc2626;
-    hasApron = false; // Vest seragam
+    hasApron = false;
     headwear = 'cap';
   } else if (type === 'alfamaret') {
     shirtColor = 0xdc2626; // Seragam merah
@@ -3544,16 +5478,19 @@ export function createVendorNPC(type: VendorType): THREE.Group {
     pantsColor = 0xea580c;
     hasApron = false;
     headwear = 'cap';
+    hasMustache = true;
   } else if (type === 'monas_betawi') {
     shirtColor = 0xf8fafc; // Baju koko putih
     pantsColor = 0x1e293b;
     hasApron = false;
     headwear = 'peci';
+    hasMustache = true;
   } else if (type === 'surabaya') {
     shirtColor = 0xdc2626; // Kaos merah "Wani!"
     pantsColor = 0x0f172a;
     apronColor = 0x78350f;
     headwear = 'udeng';
+    hasMustache = true;
   } else if (type === 'taman_jajanan') {
     shirtColor = 0x0284c7;
     pantsColor = 0x334155;
@@ -3574,16 +5511,46 @@ export function createVendorNPC(type: VendorType): THREE.Group {
     pantsColor = 0x1e3a8a; // Sarung biru ronda
     hasApron = false;
     headwear = 'peci';
+    hasMustache = true;
   } else if (type === 'pasar') {
     shirtColor = 0xd97706;
     pantsColor = 0x1e293b;
     apronColor = 0x15803d;
     headwear = 'caping';
+  } else if (type === 'pasar_buah') {
+    shirtColor = 0x10b981; // Blus hijau segar Ibu Penjual Sayur & Buah
+    pantsColor = 0x1e293b;
+    apronColor = 0xfacc15; // Celemek kuning cerah
+    headwear = 'hijab';
+  } else if (type === 'pasar_daging') {
+    shirtColor = 0xf8fafc; // Kaos putih Pak Jagal Daging
+    pantsColor = 0x0f172a;
+    apronColor = 0xb91c1c; // Celemek merah jagal daging
+    headwear = 'udeng';
+    hasMustache = true;
+  } else if (type === 'pasar_ikan') {
+    shirtColor = 0x0284c7; // Kaos biru laut Bang Bahri
+    pantsColor = 0x1e293b;
+    apronColor = 0x1e3a8a; // Celemek anti-air biru tua
+    headwear = 'cap';
+    hasMustache = true;
+  } else if (type === 'pasar_bumbu') {
+    shirtColor = 0x92400e; // Kebaya lurik Mbok Jamu & Rempah
+    pantsColor = 0x451a03; // Kain jarik batik coklat
+    apronColor = 0xd97706;
+    headwear = 'hair';
+  } else if (type === 'pasar_pakaian') {
+    shirtColor = 0x7c3aed; // Kemeja batik ungu Haji Rozak
+    pantsColor = 0x0f172a;
+    hasApron = false;
+    headwear = 'peci';
+    hasMustache = true;
   } else if (type === 'madura') {
     shirtColor = 0x0f172a; // Kaos hitam santai
     pantsColor = 0x14532d; // Sarung hijau Madura
     hasApron = false;
     headwear = 'peci';
+    hasMustache = true;
   } else if (type === 'toko_sembako') {
     shirtColor = 0xf43f5e; // Daster / blus Bu Tejo
     pantsColor = 0x1e293b;
@@ -3594,8 +5561,9 @@ export function createVendorNPC(type: VendorType): THREE.Group {
     pantsColor = 0x0f172a;
     apronColor = 0xd97706;
     headwear = 'udeng';
+    hasMustache = true;
   } else if (type === 'penjaga_makam') {
-    shirtColor = 0x064e3b; // Baju koko hijau tua penjaga makam / penjual kembang
+    shirtColor = 0x064e3b; // Baju koko hijau tua penjaga makam
     pantsColor = 0x1e293b;
     hasApron = false;
     headwear = 'peci';
@@ -3607,146 +5575,335 @@ export function createVendorNPC(type: VendorType): THREE.Group {
     headwear = 'peci';
   }
 
-  const shirtMat = new THREE.MeshStandardMaterial({ color: shirtColor, roughness: 0.75 });
-  const pantsMat = new THREE.MeshStandardMaterial({ color: pantsColor, roughness: 0.85 });
+  const shirtMat = new THREE.MeshStandardMaterial({ color: shirtColor, roughness: 0.72 });
+  const pantsMat = new THREE.MeshStandardMaterial({ color: pantsColor, roughness: 0.82 });
 
-  // Legs
-  const legGeo = new THREE.CapsuleGeometry(0.1, 0.45, 4, 8);
-  legGeo.translate(0, -0.25, 0);
+  // 1. Pelvis & Articulated Legs with Shoes
+  const pelvis = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.16, 0.25), pantsMat);
+  pelvis.position.set(0, 0.82, 0);
+  bodyRoot.add(pelvis);
 
-  const leftLeg = new THREE.Mesh(legGeo, pantsMat);
-  leftLeg.position.set(-0.14, 0.75, 0);
-  group.add(leftLeg);
+  const legGeo = new THREE.CapsuleGeometry(0.1, 0.44, 4, 8);
+  legGeo.translate(0, -0.24, 0);
 
-  const rightLeg = new THREE.Mesh(legGeo, pantsMat);
-  rightLeg.position.set(0.14, 0.75, 0);
-  group.add(rightLeg);
+  const makeVendorLeg = (lx: number) => {
+    const legGroup = new THREE.Group();
+    legGroup.position.set(lx, 0.8, 0);
+    const legMesh = new THREE.Mesh(legGeo, pantsMat);
+    legMesh.castShadow = true;
+    legGroup.add(legMesh);
 
-  // Torso
-  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.64, 0.28), shirtMat);
-  torso.position.set(0, 1.12, 0);
+    const shoe = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.09, 0.29), shoeMat);
+    shoe.position.set(0, -0.52, 0.035);
+    legGroup.add(shoe);
+
+    bodyRoot.add(legGroup);
+    return legGroup;
+  };
+
+  const leftLeg = makeVendorLeg(-0.14);
+  const rightLeg = makeVendorLeg(0.14);
+
+  // 2. Upper Body / Spine Group (pivoted at waist y = 0.88)
+  const upperBodyGroup = new THREE.Group();
+  upperBodyGroup.position.set(0, 0.88, 0);
+  bodyRoot.add(upperBodyGroup);
+
+  const torsoShape = new THREE.Shape();
+  torsoShape.moveTo(-0.22, 0);
+  torsoShape.lineTo(0.22, 0);
+  torsoShape.lineTo(0.26, 0.56);
+  torsoShape.lineTo(-0.26, 0.56);
+  torsoShape.closePath();
+
+  const torsoGeo = new THREE.ExtrudeGeometry(torsoShape, {
+    depth: 0.24,
+    bevelEnabled: true,
+    bevelThickness: 0.035,
+    bevelSize: 0.03,
+    bevelSegments: 2,
+  });
+  torsoGeo.translate(0, 0, -0.12);
+  const torso = new THREE.Mesh(torsoGeo, shirtMat);
   torso.castShadow = true;
-  group.add(torso);
+  upperBodyGroup.add(torso);
 
   // Apron or Vest
   if (hasApron) {
     const apronMat = new THREE.MeshStandardMaterial({ color: apronColor, roughness: 0.65 });
-    const apron = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.75, 0.04), apronMat);
-    apron.position.set(0, 0.98, 0.15);
-    group.add(apron);
+    const apron = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.68, 0.04), apronMat);
+    apron.position.set(0, 0.14, 0.15);
+    upperBodyGroup.add(apron);
+
+    // Front apron pocket
+    const pocket = new THREE.Mesh(
+      new THREE.BoxGeometry(0.24, 0.16, 0.025),
+      new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.7 })
+    );
+    pocket.position.set(0, 0.12, 0.175);
+    upperBodyGroup.add(pocket);
   } else if (type === 'monas_betawi') {
-    // Red Betawi Cukin cloth draped over neck
+    // Red Betawi Cukin cloth draped over shoulders
     const cukinMat = new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.7 });
     const cukin = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.45, 0.08), cukinMat);
-    cukin.position.set(0, 1.25, 0.16);
-    group.add(cukin);
+    cukin.position.set(0, 0.36, 0.14);
+    upperBodyGroup.add(cukin);
   } else if (type === 'indoalfa' || type === 'alfamaret') {
     // Minimarket vest stripe
     const stripe = new THREE.Mesh(
-      new THREE.BoxGeometry(0.51, 0.14, 0.29),
+      new THREE.BoxGeometry(0.53, 0.12, 0.3),
       new THREE.MeshStandardMaterial({ color: 0xfacc15, roughness: 0.4 })
     );
-    stripe.position.set(0, 1.2, 0);
-    group.add(stripe);
+    stripe.position.set(0, 0.32, 0);
+    upperBodyGroup.add(stripe);
+  } else if (type === 'pos_kamling' || type === 'madura') {
+    // Cross-body woven Sarung / Selempang Sarung Ronda
+    const sarungSling = new THREE.Mesh(
+      new THREE.BoxGeometry(0.11, 0.62, 0.31),
+      new THREE.MeshStandardMaterial({ color: 0xb91c1c, roughness: 0.75 })
+    );
+    sarungSling.position.set(0, 0.28, 0);
+    sarungSling.rotation.z = 0.55;
+    upperBodyGroup.add(sarungSling);
   }
 
-  // Arms (pivoted at shoulders)
-  const leftArm = new THREE.Mesh(legGeo, shirtMat);
-  leftArm.scale.set(0.8, 0.85, 0.8);
-  leftArm.position.set(-0.33, 1.35, 0);
-  group.add(leftArm);
+  // 3. Articulated Two-Segment Arms (Shoulder -> Upper Arm -> Elbow -> Forearm -> Hand)
+  const upperArmGeo = new THREE.CapsuleGeometry(0.08, 0.2, 4, 8);
+  upperArmGeo.translate(0, -0.12, 0);
+  const forearmGeo = new THREE.CapsuleGeometry(0.07, 0.2, 4, 8);
+  forearmGeo.translate(0, -0.12, 0);
 
-  const rightArm = new THREE.Mesh(legGeo, shirtMat);
-  rightArm.scale.set(0.8, 0.85, 0.8);
-  rightArm.position.set(0.33, 1.35, 0);
-  group.add(rightArm);
+  const buildVendorArm = (shoulderX: number) => {
+    const shoulderPivot = new THREE.Group();
+    shoulderPivot.position.set(shoulderX, 0.5, 0);
 
-  // Head
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.19, 12, 12), skinMat);
-  head.position.set(0, 1.64, 0);
-  group.add(head);
+    const upperArm = new THREE.Mesh(upperArmGeo, shirtMat);
+    upperArm.castShadow = true;
+    shoulderPivot.add(upperArm);
 
-  // Headwear
+    const elbowPivot = new THREE.Group();
+    elbowPivot.position.set(0, -0.25, 0);
+
+    const forearm = new THREE.Mesh(forearmGeo, skinMat);
+    forearm.castShadow = true;
+    elbowPivot.add(forearm);
+
+    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.074, 8, 8), skinMat);
+    hand.position.set(0, -0.25, 0);
+    elbowPivot.add(hand);
+
+    shoulderPivot.add(elbowPivot);
+    upperBodyGroup.add(shoulderPivot);
+    return { shoulderPivot, elbowPivot };
+  };
+
+  const leftArmData = buildVendorArm(-0.32);
+  const rightArmData = buildVendorArm(0.32);
+  const leftArm = leftArmData.shoulderPivot;
+  const rightArm = rightArmData.shoulderPivot;
+  const leftElbow = leftArmData.elbowPivot;
+  const rightElbow = rightArmData.elbowPivot;
+
+  // 4. Neck & Expressive Face (Eyes, Eyebrows, Nose, Mustache, Smile & Headwear)
+  const neck = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.08, 0.09, 0.12, 8),
+    skinMat
+  );
+  neck.position.set(0, 0.6, 0);
+  upperBodyGroup.add(neck);
+
+  const head = new THREE.Group();
+  head.position.set(0, 0.75, 0);
+
+  const headSphere = new THREE.Mesh(new THREE.SphereGeometry(0.195, 14, 14), skinMat);
+  headSphere.scale.set(0.96, 1.04, 0.98);
+  headSphere.castShadow = true;
+  head.add(headSphere);
+
+  // Ears & Eyes
+  for (const ex of [-0.185, 0.185]) {
+    const ear = new THREE.Mesh(new THREE.SphereGeometry(0.04, 6, 6), skinMat);
+    ear.scale.set(0.55, 1.1, 0.8);
+    ear.position.set(ex, 0, 0);
+    head.add(ear);
+  }
+  for (const ex of [-0.065, 0.065]) {
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.024, 6, 6), darkMat);
+    eye.position.set(ex, 0.025, 0.175);
+    head.add(eye);
+
+    const brow = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.015, 0.015), darkMat);
+    brow.position.set(ex, 0.068, 0.175);
+    head.add(brow);
+  }
+
+  const nose = new THREE.Mesh(new THREE.BoxGeometry(0.034, 0.045, 0.035), skinMat);
+  nose.position.set(0, -0.01, 0.188);
+  head.add(nose);
+
+  if (hasMustache) {
+    const mustache = new THREE.Mesh(new THREE.BoxGeometry(0.095, 0.022, 0.02), darkMat);
+    mustache.position.set(0, -0.052, 0.185);
+    head.add(mustache);
+  }
+
+  const smile = new THREE.Mesh(
+    new THREE.BoxGeometry(0.075, 0.016, 0.015),
+    new THREE.MeshBasicMaterial({ color: 0x451a03 })
+  );
+  smile.position.set(0, -0.08, 0.178);
+  head.add(smile);
+
+  // Headwear attached to head group so it nods and turns with the vendor's head!
   if (headwear === 'peci') {
     const peci = new THREE.Mesh(
-      new THREE.BoxGeometry(0.3, 0.14, 0.34),
-      new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.9 })
+      new THREE.CylinderGeometry(0.18, 0.195, 0.14, 14),
+      darkMat
     );
-    peci.position.set(0, 1.8, 0);
-    group.add(peci);
+    peci.scale.set(0.95, 1, 1.05);
+    peci.position.set(0, 0.15, 0);
+    head.add(peci);
   } else if (headwear === 'caping') {
-    // Traditional bamboo cone hat (Caping)
     const caping = new THREE.Mesh(
-      new THREE.ConeGeometry(0.48, 0.22, 12),
+      new THREE.ConeGeometry(0.48, 0.22, 14),
       new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.75 })
     );
-    caping.position.set(0, 1.84, 0);
-    group.add(caping);
+    caping.position.set(0, 0.19, 0);
+    head.add(caping);
   } else if (headwear === 'udeng') {
-    // Traditional Javanese/East Java Udeng headband
     const udeng = new THREE.Mesh(
-      new THREE.TorusGeometry(0.2, 0.05, 8, 16),
+      new THREE.TorusGeometry(0.19, 0.048, 8, 16),
       new THREE.MeshStandardMaterial({ color: 0xb91c1c, roughness: 0.7 })
     );
     udeng.rotation.x = Math.PI / 2;
-    udeng.position.set(0, 1.76, 0);
-    group.add(udeng);
+    udeng.position.set(0, 0.11, 0);
+    head.add(udeng);
   } else if (headwear === 'cap') {
     const cap = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.2, 0.2, 0.1, 12),
-      new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.5 })
+      new THREE.SphereGeometry(0.2, 12, 10, 0, Math.PI * 2, 0, Math.PI * 0.55),
+      darkMat
     );
-    cap.position.set(0, 1.78, 0);
-    group.add(cap);
+    cap.position.set(0, 0.03, 0);
+    head.add(cap);
+
+    const visor = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.025, 0.14), darkMat);
+    visor.position.set(0, 0.08, 0.16);
+    visor.rotation.x = 0.15;
+    head.add(visor);
+  } else if (headwear === 'hijab') {
+    const hijabMat = new THREE.MeshStandardMaterial({ color: 0xf43f5e, roughness: 0.65 });
+    const hijabHood = new THREE.Mesh(
+      new THREE.SphereGeometry(0.205, 14, 12, 0, Math.PI * 2, 0, Math.PI * 0.72),
+      hijabMat
+    );
+    hijabHood.position.set(0, 0.01, -0.02);
+    head.add(hijabHood);
+
+    const hijabCollar = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.15, 0.22, 0.14, 12),
+      hijabMat
+    );
+    hijabCollar.position.set(0, -0.15, 0);
+    head.add(hijabCollar);
   } else {
-    // Hair bun
-    const bun = new THREE.Mesh(
-      new THREE.SphereGeometry(0.12, 8, 8),
-      new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.8 })
+    // Neat hair + Ibu Kantin / Bu Tejo / Mbok Jamu hair bun (Sanggul/Konde)
+    const hairCrown = new THREE.Mesh(
+      new THREE.SphereGeometry(0.2, 12, 10, 0, Math.PI * 2, 0, Math.PI * 0.58),
+      darkMat
     );
-    bun.position.set(0, 1.74, -0.16);
-    group.add(bun);
+    hairCrown.position.set(0, 0.02, -0.01);
+    head.add(hairCrown);
+
+    const bun = new THREE.Mesh(new THREE.SphereGeometry(0.11, 10, 10), darkMat);
+    bun.position.set(0, 0.06, -0.18);
+    head.add(bun);
   }
 
-  // Held Prop (in right hand)
+  upperBodyGroup.add(head);
+
+  // 5. Held Prop (in right hand, attached to rightElbow!)
   let rightItem: THREE.Mesh | null = null;
   if (type === 'pecel_lele') {
-    // Bamboo woven fan for grilling lele/ayam
+    // Bamboo woven fan for grilling lele/ayam (Kipas Bambu)
     rightItem = new THREE.Mesh(
       new THREE.BoxGeometry(0.24, 0.26, 0.02),
       new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.6 })
     );
-    rightItem.position.set(0, -0.42, 0.12);
-    rightArm.add(rightItem);
+    rightItem.position.set(0, -0.28, 0.12);
+    rightElbow.add(rightItem);
   } else if (type === 'bakso') {
-    // Stainless steel soup ladle (centong kuah)
+    // Stainless steel soup ladle (Centong Kuah Bakso)
     rightItem = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.02, 0.02, 0.45, 6),
+      new THREE.CylinderGeometry(0.02, 0.02, 0.42, 6),
       new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.85, roughness: 0.2 })
     );
-    rightItem.position.set(0, -0.42, 0.1);
-    rightArm.add(rightItem);
+    rightItem.position.set(0, -0.28, 0.1);
+    rightElbow.add(rightItem);
   } else if (type === 'bengkel') {
-    // Wrench / spanner tool
+    // Wrench / spanner tool (Kunci Inggris)
     rightItem = new THREE.Mesh(
-      new THREE.BoxGeometry(0.06, 0.35, 0.04),
+      new THREE.BoxGeometry(0.06, 0.34, 0.04),
       new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.9, roughness: 0.2 })
     );
-    rightItem.position.set(0, -0.42, 0.08);
-    rightArm.add(rightItem);
+    rightItem.position.set(0, -0.28, 0.08);
+    rightElbow.add(rightItem);
   } else if (type === 'pos_kamling') {
-    // Patrol flashlight (senter ronda)
+    // Patrol flashlight (Senter Ronda)
     rightItem = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.04, 0.06, 0.35, 8),
+      new THREE.CylinderGeometry(0.04, 0.06, 0.34, 8),
       new THREE.MeshStandardMaterial({ color: 0x38bdf8, metalness: 0.7, roughness: 0.3 })
     );
     rightItem.rotation.x = Math.PI / 2;
-    rightItem.position.set(0, -0.42, 0.15);
-    rightArm.add(rightItem);
+    rightItem.position.set(0, -0.26, 0.14);
+    rightElbow.add(rightItem);
+  } else if (type === 'pasar_daging') {
+    // Stainless Steel Butcher Cleaver (Golok Potong Daging)
+    rightItem = new THREE.Mesh(
+      new THREE.BoxGeometry(0.03, 0.32, 0.14),
+      new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.9, roughness: 0.2 })
+    );
+    rightItem.position.set(0, -0.28, 0.12);
+    rightElbow.add(rightItem);
+  } else if (type === 'pasar_ikan') {
+    // Fresh Silver Fish held up to show shoppers
+    rightItem = new THREE.Mesh(
+      new THREE.CapsuleGeometry(0.055, 0.22, 4, 8),
+      new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.75, roughness: 0.25 })
+    );
+    rightItem.rotation.x = Math.PI / 2;
+    rightItem.position.set(0, -0.26, 0.12);
+    rightElbow.add(rightItem);
+  } else if (type === 'pasar_buah') {
+    // Woven Bamboo Fruit Basket
+    rightItem = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.16, 0.12, 0.14, 10),
+      new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.8 })
+    );
+    rightItem.position.set(0, -0.28, 0.12);
+    rightElbow.add(rightItem);
+  } else if (type === 'pasar_bumbu') {
+    // Bottle of Jamu Kunyit Asam
+    rightItem = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.045, 0.05, 0.24, 8),
+      new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.3 })
+    );
+    rightItem.position.set(0, -0.26, 0.1);
+    rightElbow.add(rightItem);
   }
 
   group.userData.vendorType = type;
-  group.userData.limbs = { leftLeg, rightLeg, leftArm, rightArm, head, rightItem };
+  group.userData.limbs = {
+    bodyRoot,
+    upperBodyGroup,
+    leftLeg,
+    rightLeg,
+    leftArm,
+    rightArm,
+    leftElbow,
+    rightElbow,
+    head,
+    rightItem,
+  };
   return group;
 }
 
@@ -3769,15 +5926,17 @@ export function createSittingNPC(
     finalPants = 0x14532d;
   }
 
-  const skinMat = new THREE.MeshStandardMaterial({ color: 0xd49464, roughness: 0.7 });
-  const shirtMat = new THREE.MeshStandardMaterial({ color: finalShirt, roughness: 0.75 });
-  const pantsMat = new THREE.MeshStandardMaterial({ color: finalPants, roughness: 0.85 });
+  const skinMat = new THREE.MeshStandardMaterial({ color: 0xd49464, roughness: 0.65 });
+  const shirtMat = new THREE.MeshStandardMaterial({ color: finalShirt, roughness: 0.72 });
+  const pantsMat = new THREE.MeshStandardMaterial({ color: finalPants, roughness: 0.82 });
+  const darkMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.75 });
+  const shoeMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.45 });
 
-  // Sitting Legs (Thigh extended horizontally, calf downward)
-  const thighGeo = new THREE.CapsuleGeometry(0.1, 0.34, 4, 8);
-  thighGeo.translate(0, 0, 0.18);
-  const calfGeo = new THREE.CapsuleGeometry(0.09, 0.38, 4, 8);
-  calfGeo.translate(0, -0.2, 0.35);
+  // 1. Sitting Legs (Thigh extended horizontally, bent knee, calf downward + shoes)
+  const thighGeo = new THREE.CapsuleGeometry(0.095, 0.32, 4, 8);
+  thighGeo.translate(0, 0, 0.17);
+  const calfGeo = new THREE.CapsuleGeometry(0.084, 0.34, 4, 8);
+  calfGeo.translate(0, -0.18, 0.34);
 
   for (const sx of [-0.14, 0.14]) {
     const legGroup = new THREE.Group();
@@ -3789,60 +5948,136 @@ export function createSittingNPC(
 
     const calf = new THREE.Mesh(calfGeo, pantsMat);
     legGroup.add(calf);
+
+    const shoe = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.085, 0.27), shoeMat);
+    shoe.position.set(0, -0.38, 0.38);
+    legGroup.add(shoe);
+
     group.add(legGroup);
   }
 
-  // Torso sitting upright
-  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.6, 0.26), shirtMat);
-  torso.position.set(0, 0.84, -0.05);
+  // 2. Sculpted Upper Body Group (pivoted at hip y = 0.56)
+  const upperBodyGroup = new THREE.Group();
+  upperBodyGroup.position.set(0, 0.56, -0.05);
+  group.add(upperBodyGroup);
+
+  const torsoShape = new THREE.Shape();
+  torsoShape.moveTo(-0.21, 0);
+  torsoShape.lineTo(0.21, 0);
+  torsoShape.lineTo(0.25, 0.52);
+  torsoShape.lineTo(-0.25, 0.52);
+  torsoShape.closePath();
+
+  const torsoGeo = new THREE.ExtrudeGeometry(torsoShape, {
+    depth: 0.22,
+    bevelEnabled: true,
+    bevelThickness: 0.035,
+    bevelSize: 0.03,
+    bevelSegments: 2,
+  });
+  torsoGeo.translate(0, 0, -0.11);
+  const torso = new THREE.Mesh(torsoGeo, shirtMat);
   torso.castShadow = true;
-  group.add(torso);
+  upperBodyGroup.add(torso);
 
-  // Arms resting forward on thighs/knees
-  const armGeo = new THREE.CapsuleGeometry(0.08, 0.38, 4, 8);
-  armGeo.translate(0, -0.16, 0.12);
+  // 3. Articulated Two-Segment Sitting Arms + Coffee Cup
+  const upperArmGeo = new THREE.CapsuleGeometry(0.075, 0.18, 4, 8);
+  upperArmGeo.translate(0, -0.11, 0);
+  const forearmGeo = new THREE.CapsuleGeometry(0.065, 0.18, 4, 8);
+  forearmGeo.translate(0, -0.11, 0);
 
-  const leftArm = new THREE.Mesh(armGeo, shirtMat);
-  leftArm.rotation.x = -0.55;
-  leftArm.position.set(-0.3, 1.05, 0);
-  group.add(leftArm);
+  const makeSitArm = (sx: number) => {
+    const shoulder = new THREE.Group();
+    shoulder.position.set(sx, 0.48, 0);
+    const uArm = new THREE.Mesh(upperArmGeo, shirtMat);
+    shoulder.add(uArm);
 
-  const rightArm = new THREE.Mesh(armGeo, shirtMat);
-  rightArm.rotation.x = -0.65;
-  rightArm.position.set(0.3, 1.05, 0);
-  group.add(rightArm);
+    const elbow = new THREE.Group();
+    elbow.position.set(0, -0.23, 0);
+    const fArm = new THREE.Mesh(forearmGeo, skinMat);
+    elbow.add(fArm);
 
-  // Little coffee cup in right hand
+    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.068, 8, 8), skinMat);
+    hand.position.set(0, -0.22, 0);
+    elbow.add(hand);
+
+    shoulder.add(elbow);
+    upperBodyGroup.add(shoulder);
+    return { shoulder, elbow };
+  };
+
+  const leftArmData = makeSitArm(-0.3);
+  const rightArmData = makeSitArm(0.3);
+  const leftArm = leftArmData.shoulder;
+  const rightArm = rightArmData.shoulder;
+  const leftElbow = leftArmData.elbow;
+  const rightElbow = rightArmData.elbow;
+
+  leftArm.rotation.set(-0.35, 0, 0.12);
+  leftElbow.rotation.x = -0.75;
+  rightArm.rotation.set(-0.45, 0, -0.12);
+  rightElbow.rotation.x = -0.85;
+
+  // Coffee cup held in right hand
   const cup = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.05, 0.04, 0.1, 8),
+    new THREE.CylinderGeometry(0.048, 0.04, 0.1, 8),
     new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.3 })
   );
-  cup.position.set(0.28, 0.68, 0.28);
-  group.add(cup);
+  cup.position.set(0, -0.24, 0.05);
+  cup.rotation.x = Math.PI / 2;
+  rightElbow.add(cup);
 
-  // Head looking relaxed
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.19, 12, 12), skinMat);
-  head.position.set(0, 1.34, -0.05);
-  group.add(head);
+  // 4. Expressive Head with Face & Headwear
+  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.085, 0.11, 8), skinMat);
+  neck.position.set(0, 0.58, 0);
+  upperBodyGroup.add(neck);
 
-  // Headwear
+  const head = new THREE.Group();
+  head.position.set(0, 0.72, 0);
+
+  const headSphere = new THREE.Mesh(new THREE.SphereGeometry(0.185, 14, 14), skinMat);
+  headSphere.scale.set(0.96, 1.04, 0.98);
+  head.add(headSphere);
+
+  for (const ex of [-0.06, 0.06]) {
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.022, 6, 6), darkMat);
+    eye.position.set(ex, 0.025, 0.168);
+    head.add(eye);
+  }
+  const smile = new THREE.Mesh(
+    new THREE.BoxGeometry(0.068, 0.015, 0.015),
+    new THREE.MeshBasicMaterial({ color: 0x451a03 })
+  );
+  smile.position.set(0, -0.068, 0.17);
+  head.add(smile);
+
   if (archetype === 'santri') {
     const peci = new THREE.Mesh(
-      new THREE.BoxGeometry(0.28, 0.13, 0.32),
-      new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.9 })
+      new THREE.CylinderGeometry(0.175, 0.185, 0.12, 12),
+      darkMat
     );
-    peci.position.set(0, 1.48, -0.05);
-    group.add(peci);
+    peci.position.set(0, 0.14, 0);
+    head.add(peci);
   } else {
-    const cap = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.18, 0.18, 0.09, 10),
-      new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.6 })
+    const hair = new THREE.Mesh(
+      new THREE.SphereGeometry(0.192, 12, 10, 0, Math.PI * 2, 0, Math.PI * 0.56),
+      darkMat
     );
-    cap.position.set(0, 1.47, -0.05);
-    group.add(cap);
+    hair.position.set(0, 0.03, 0);
+    head.add(hair);
   }
 
-  group.userData.limbs = { head, leftArm, rightArm };
+  upperBodyGroup.add(head);
+
+  group.userData.head = head;
+  group.userData.limbs = {
+    upperBodyGroup,
+    head,
+    leftArm,
+    rightArm,
+    leftElbow,
+    rightElbow,
+  };
   return group;
 }
 
@@ -5493,6 +7728,324 @@ export function createRumahKarakterUtama(maxAnisotropy: number): THREE.Group {
   group.userData.doorPivot = doorPivot;
   return group;
 }
+
+export type KucingCoatType = 'oyen' | 'calico' | 'hitam_putih' | 'abu';
+
+export function createKucingKampung(coatType: KucingCoatType = 'oyen'): THREE.Group {
+  const group = new THREE.Group();
+  group.name = `KucingKampung_${coatType}`;
+
+  const primaryHex =
+    coatType === 'oyen'
+      ? 0xf97316
+      : coatType === 'calico'
+      ? 0xf8fafc
+      : coatType === 'hitam_putih'
+      ? 0x1e293b
+      : 0x64748b;
+
+  const secondaryHex =
+    coatType === 'oyen'
+      ? 0xfdba74
+      : coatType === 'calico'
+      ? 0xea580c
+      : coatType === 'hitam_putih'
+      ? 0xf8fafc
+      : 0x94a3b8;
+
+  const furMat = new THREE.MeshStandardMaterial({
+    color: primaryHex,
+    roughness: 0.78,
+  });
+  const secondaryMat = new THREE.MeshStandardMaterial({
+    color: secondaryHex,
+    roughness: 0.78,
+  });
+  const darkPatchMat = new THREE.MeshStandardMaterial({
+    color: 0x27272a,
+    roughness: 0.8,
+  });
+  const pinkMat = new THREE.MeshStandardMaterial({
+    color: 0xf472b6,
+    roughness: 0.5,
+  });
+  const eyeMat = new THREE.MeshStandardMaterial({
+    color: coatType === 'oyen' ? 0x84cc16 : 0xfacc15,
+    emissive: coatType === 'oyen' ? 0x4d7c0f : 0xca8a04,
+    emissiveIntensity: 0.35,
+    roughness: 0.2,
+  });
+  const pupilMat = new THREE.MeshBasicMaterial({ color: 0x09090b });
+
+  const bodyGroup = new THREE.Group();
+  group.add(bodyGroup);
+
+  // 1. Torso (Badan Kucing)
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.22, 0.52), furMat);
+  torso.position.set(0, 0.28, 0);
+  torso.castShadow = true;
+  bodyGroup.add(torso);
+
+  // Chest / Belly fur
+  const chest = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.16, 0.22), secondaryMat);
+  chest.position.set(0, 0.25, 0.18);
+  bodyGroup.add(chest);
+
+  // Calico / Tabby markings on back
+  if (coatType === 'calico') {
+    const patch1 = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.12, 0.18), secondaryMat);
+    patch1.position.set(0.01, 0.34, 0.08);
+    bodyGroup.add(patch1);
+    const patch2 = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.12, 0.18), darkPatchMat);
+    patch2.position.set(-0.01, 0.34, -0.12);
+    bodyGroup.add(patch2);
+  } else if (coatType === 'oyen') {
+    const stripeMat = new THREE.MeshStandardMaterial({ color: 0xc2410c, roughness: 0.8 });
+    for (const sz of [-0.14, 0.0, 0.14]) {
+      const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.08, 0.05), stripeMat);
+      stripe.position.set(0, 0.36, sz);
+      bodyGroup.add(stripe);
+    }
+  }
+
+  // Cute Collar & Golden Bell (Kalung Lonceng Kucing)
+  const collar = new THREE.Mesh(
+    new THREE.BoxGeometry(0.25, 0.05, 0.06),
+    new THREE.MeshStandardMaterial({
+      color: coatType === 'oyen' ? 0xdc2626 : 0x0284c7,
+      roughness: 0.4,
+    })
+  );
+  collar.position.set(0, 0.3, 0.24);
+  bodyGroup.add(collar);
+
+  const bell = new THREE.Mesh(
+    new THREE.SphereGeometry(0.032, 8, 8),
+    new THREE.MeshStandardMaterial({ color: 0xfacc15, metalness: 0.7, roughness: 0.2 })
+  );
+  bell.position.set(0, 0.24, 0.28);
+  bodyGroup.add(bell);
+
+  // 2. Head Pivot (Kepala, Telinga Lancip, Hidung Pink & Kumis)
+  const headPivot = new THREE.Group();
+  headPivot.position.set(0, 0.38, 0.28);
+
+  const headMesh = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.21, 0.22), furMat);
+  headMesh.position.set(0, 0.04, 0.04);
+  headMesh.castShadow = true;
+  headPivot.add(headMesh);
+
+  // Muzzle / Snout
+  const muzzle = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.09, 0.08), secondaryMat);
+  muzzle.position.set(0, 0.0, 0.16);
+  headPivot.add(muzzle);
+
+  // Pink nose
+  const nose = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.035, 0.03), pinkMat);
+  nose.position.set(0, 0.03, 0.2);
+  headPivot.add(nose);
+
+  // Eyes & Pupils
+  for (const ex of [-0.065, 0.065]) {
+    const eye = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.045, 0.02), eyeMat);
+    eye.position.set(ex, 0.065, 0.15);
+    headPivot.add(eye);
+
+    const pupil = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.038, 0.024), pupilMat);
+    pupil.position.set(ex, 0.065, 0.153);
+    headPivot.add(pupil);
+  }
+
+  // Pointy Cat Ears (Telinga Kucing)
+  const earGeo = new THREE.ConeGeometry(0.055, 0.11, 4);
+  const innerEarGeo = new THREE.ConeGeometry(0.032, 0.07, 4);
+  for (const side of [-1, 1]) {
+    const ear = new THREE.Mesh(earGeo, coatType === 'calico' && side > 0 ? darkPatchMat : furMat);
+    ear.position.set(side * 0.075, 0.18, 0.03);
+    ear.rotation.y = Math.PI / 4;
+    ear.rotation.z = side * -0.15;
+    headPivot.add(ear);
+
+    const innerEar = new THREE.Mesh(innerEarGeo, pinkMat);
+    innerEar.position.set(side * 0.075, 0.175, 0.045);
+    innerEar.rotation.y = Math.PI / 4;
+    innerEar.rotation.z = side * -0.15;
+    headPivot.add(innerEar);
+  }
+
+  bodyGroup.add(headPivot);
+
+  // 3. Articulated 4 Legs with Paws
+  const makeLeg = (lx: number, lz: number) => {
+    const pivot = new THREE.Group();
+    pivot.position.set(lx, 0.2, lz);
+
+    const legMesh = new THREE.Mesh(new THREE.BoxGeometry(0.065, 0.2, 0.065), furMat);
+    legMesh.position.set(0, -0.09, 0);
+    legMesh.castShadow = true;
+    pivot.add(legMesh);
+
+    const pawMesh = new THREE.Mesh(new THREE.BoxGeometry(0.072, 0.045, 0.085), secondaryMat);
+    pawMesh.position.set(0, -0.18, 0.01);
+    pivot.add(pawMesh);
+
+    group.add(pivot);
+    return pivot;
+  };
+
+  const frontLeft = makeLeg(-0.075, 0.18);
+  const frontRight = makeLeg(0.075, 0.18);
+  const backLeft = makeLeg(-0.075, -0.18);
+  const backRight = makeLeg(0.075, -0.18);
+
+  // 4. Articulated Raised Tail (Ekor Kucing Melengkung)
+  const tailPivot = new THREE.Group();
+  tailPivot.position.set(0, 0.34, -0.25);
+
+  const tailBase = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.026, 0.032, 0.26, 7),
+    coatType === 'calico' ? darkPatchMat : furMat
+  );
+  tailBase.position.set(0, 0.11, -0.05);
+  tailBase.rotation.x = -0.45;
+  tailPivot.add(tailBase);
+
+  const tailTip = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.022, 0.026, 0.16, 7),
+    secondaryMat
+  );
+  tailTip.position.set(0, 0.25, -0.09);
+  tailTip.rotation.x = -0.15;
+  tailPivot.add(tailTip);
+
+  bodyGroup.add(tailPivot);
+
+  group.scale.setScalar(1.18);
+
+  group.userData.catParts = {
+    bodyGroup,
+    headPivot,
+    tailPivot,
+    frontLeft,
+    frontRight,
+    backLeft,
+    backRight,
+  };
+
+  return group;
+}
+
+export type BurungVariant = 'merpati' | 'gereja' | 'elang';
+
+export function createBurungTerbang(variant: BurungVariant = 'merpati'): THREE.Group {
+  const group = new THREE.Group();
+  group.name = `BurungTerbang_${variant}`;
+
+  const bodyHex =
+    variant === 'elang'
+      ? 0x7c2d12 // Chestnut brown Elang Bondol
+      : variant === 'merpati'
+      ? 0x64748b // Slate grey Merpati
+      : 0x78350f; // Warm brown Burung Gereja
+
+  const breastHex =
+    variant === 'elang'
+      ? 0xf8fafc // White head & breast of Elang Bondol
+      : variant === 'merpati'
+      ? 0xcbd5e1
+      : 0xd6d3d1;
+
+  const wingTipHex =
+    variant === 'elang'
+      ? 0x1e293b
+      : variant === 'merpati'
+      ? 0x334155
+      : 0x451a03;
+
+  const bodyMat = new THREE.MeshStandardMaterial({
+    color: bodyHex,
+    roughness: 0.65,
+  });
+  const breastMat = new THREE.MeshStandardMaterial({
+    color: breastHex,
+    roughness: 0.65,
+  });
+  const wingTipMat = new THREE.MeshStandardMaterial({
+    color: wingTipHex,
+    roughness: 0.7,
+  });
+  const beakMat = new THREE.MeshStandardMaterial({
+    color: 0xfacc15,
+    roughness: 0.4,
+  });
+
+  // 1. Streamlined Torso & Breast
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.16, 0.48), bodyMat);
+  body.castShadow = true;
+  group.add(body);
+
+  const breast = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.12, 0.28), breastMat);
+  breast.position.set(0, -0.03, 0.14);
+  group.add(breast);
+
+  // 2. Head & Beak
+  const head = new THREE.Mesh(
+    new THREE.BoxGeometry(0.16, 0.15, 0.18),
+    variant === 'elang' ? breastMat : bodyMat
+  );
+  head.position.set(0, 0.06, 0.28);
+  group.add(head);
+
+  const beak = new THREE.Mesh(new THREE.ConeGeometry(0.04, 0.14, 5), beakMat);
+  beak.rotation.x = Math.PI / 2;
+  beak.position.set(0, 0.05, 0.42);
+  group.add(beak);
+
+  // 3. Fanned Tail Feathers (Ekor Burung)
+  const tail = new THREE.Mesh(
+    new THREE.BoxGeometry(0.28, 0.04, 0.26),
+    variant === 'elang' ? wingTipMat : bodyMat
+  );
+  tail.position.set(0, 0.01, -0.32);
+  tail.rotation.x = 0.12;
+  group.add(tail);
+
+  // 4. Articulated Left & Right Wings (Sayap Kiri & Kanan)
+  const createWing = (dir: -1 | 1) => {
+    const wingPivot = new THREE.Group();
+    wingPivot.position.set(dir * 0.1, 0.03, 0.04);
+
+    // Inner wing
+    const innerWing = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.035, 0.26), bodyMat);
+    innerWing.position.set(dir * 0.21, 0, 0);
+    innerWing.castShadow = true;
+    wingPivot.add(innerWing);
+
+    // Outer primary feathers
+    const outerWing = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.028, 0.2), wingTipMat);
+    outerWing.position.set(dir * 0.56, 0, -0.03);
+    outerWing.rotation.y = dir * -0.18;
+    outerWing.castShadow = true;
+    wingPivot.add(outerWing);
+
+    group.add(wingPivot);
+    return wingPivot;
+  };
+
+  const leftWing = createWing(-1);
+  const rightWing = createWing(1);
+
+  const scale = variant === 'elang' ? 1.45 : variant === 'merpati' ? 1.05 : 0.85;
+  group.scale.setScalar(scale);
+
+  group.userData.wings = {
+    leftWing,
+    rightWing,
+  };
+
+  return group;
+}
+
 
 
 

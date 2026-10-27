@@ -250,7 +250,9 @@ export function createLicensePlateTexture(
   return finalizeColorTexture(canvas, maxAnisotropy);
 }
 
+let _cachedBatikTex: THREE.CanvasTexture | null = null;
 export function createBatikFabricTexture(maxAnisotropy: number): THREE.CanvasTexture {
+  if (_cachedBatikTex) return _cachedBatikTex;
   const canvas = document.createElement('canvas');
   canvas.width = 256;
   canvas.height = 256;
@@ -275,14 +277,20 @@ export function createBatikFabricTexture(maxAnisotropy: number): THREE.CanvasTex
     }
   }
 
-  return finalizeColorTexture(canvas, maxAnisotropy, 2, 2);
+  _cachedBatikTex = finalizeColorTexture(canvas, maxAnisotropy, 2, 2);
+  return _cachedBatikTex;
 }
 
+const _rukoTexCache = new Map<string, THREE.CanvasTexture>();
 export function createRukoFacadeTexture(
   wallColor: string,
   windowLit: boolean,
   maxAnisotropy: number
 ): THREE.CanvasTexture {
+  const key = `${wallColor}_${windowLit}`;
+  const existing = _rukoTexCache.get(key);
+  if (existing) return existing;
+
   const canvas = document.createElement('canvas');
   canvas.width = 256;
   canvas.height = 512;
@@ -320,7 +328,9 @@ export function createRukoFacadeTexture(
     ctx.stroke();
   }
 
-  return finalizeColorTexture(canvas, maxAnisotropy);
+  const tex = finalizeColorTexture(canvas, maxAnisotropy);
+  _rukoTexCache.set(key, tex);
+  return tex;
 }
 
 export function createGangPavingTexture(maxAnisotropy: number): THREE.CanvasTexture {
@@ -370,7 +380,9 @@ export function createGangPavingTexture(maxAnisotropy: number): THREE.CanvasText
   return finalizeColorTexture(canvas, maxAnisotropy, 1, 4);
 }
 
+let _cachedGentengTex: THREE.CanvasTexture | null = null;
 export function createGentengClayTexture(maxAnisotropy: number): THREE.CanvasTexture {
+  if (_cachedGentengTex) return _cachedGentengTex;
   const canvas = document.createElement('canvas');
   canvas.width = 256;
   canvas.height = 256;
@@ -397,7 +409,8 @@ export function createGentengClayTexture(maxAnisotropy: number): THREE.CanvasTex
     }
   }
 
-  return finalizeColorTexture(canvas, maxAnisotropy, 2, 2);
+  _cachedGentengTex = finalizeColorTexture(canvas, maxAnisotropy, 2, 2);
+  return _cachedGentengTex;
 }
 
 export function createMaduraSignTexture(maxAnisotropy: number): THREE.CanvasTexture {
@@ -431,34 +444,66 @@ export function createMaduraSignTexture(maxAnisotropy: number): THREE.CanvasText
 
 export function createPasarBannerTexture(maxAnisotropy: number): THREE.CanvasTexture {
   const canvas = document.createElement('canvas');
-  canvas.width = 512;
-  canvas.height = 160;
+  canvas.width = 640;
+  canvas.height = 180;
   const ctx = canvas.getContext('2d')!;
 
-  ctx.fillStyle = '#15803d';
-  ctx.fillRect(0, 0, 512, 160);
+  ctx.fillStyle = '#065f46';
+  ctx.fillRect(0, 0, 640, 180);
 
-  ctx.strokeStyle = '#fef08a';
+  ctx.strokeStyle = '#facc15';
   ctx.lineWidth = 10;
-  ctx.strokeRect(8, 8, 496, 144);
+  ctx.strokeRect(8, 8, 624, 164);
 
   ctx.fillStyle = '#facc15';
-  ctx.fillRect(20, 20, 472, 34);
+  ctx.fillRect(20, 18, 600, 36);
   ctx.fillStyle = '#0f172a';
-  ctx.font = 'bold 16px "Plus Jakarta Sans", sans-serif';
+  ctx.font = 'bold 17px "Plus Jakarta Sans", sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText('PEMERINTAH KOTA · DINAS PERDAGANGAN & PASAR', 256, 44);
+  ctx.fillText('PEMERINTAH KOTA NUSANTARA · PERUMDA PASAR JAYA RAYA', 320, 42);
 
   ctx.fillStyle = '#ffffff';
-  ctx.font = '900 32px "Chakra Petch", sans-serif';
-  ctx.fillText('PASAR RAKYAT TRADISIONAL', 256, 98);
+  ctx.font = '900 36px "Chakra Petch", sans-serif';
+  ctx.fillText('PASAR RAYA TRADISIONAL RAKYAT', 320, 102);
 
   ctx.fillStyle = '#fef08a';
   ctx.font = 'bold 17px "Plus Jakarta Sans", sans-serif';
-  ctx.fillText('ANEKA SAYUR MAYUR · BUAH SEGAR · KULINER JAJAN PASAR', 256, 134);
+  ctx.fillText('SAYUR · BUAH SEGAR · DAGING · IKAN LAUT · BUMBU REMPAH · JAJAN PASAR', 320, 144);
 
   return finalizeColorTexture(canvas, maxAnisotropy);
 }
+
+export function createLosPasarSignTexture(
+  title: string,
+  subtitle: string,
+  bgColor: string,
+  accentColor: string,
+  maxAnisotropy: number
+): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 384;
+  canvas.height = 104;
+  const ctx = canvas.getContext('2d')!;
+
+  ctx.fillStyle = bgColor;
+  ctx.fillRect(0, 0, 384, 104);
+
+  ctx.strokeStyle = accentColor;
+  ctx.lineWidth = 6;
+  ctx.strokeRect(5, 5, 374, 94);
+
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '900 23px "Chakra Petch", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(title, 192, 46);
+
+  ctx.fillStyle = accentColor;
+  ctx.font = 'bold 14px "Plus Jakarta Sans", sans-serif';
+  ctx.fillText(subtitle, 192, 78);
+
+  return finalizeColorTexture(canvas, maxAnisotropy);
+}
+
 
 export function createPosKamlingSignTexture(maxAnisotropy: number): THREE.CanvasTexture {
   const canvas = document.createElement('canvas');

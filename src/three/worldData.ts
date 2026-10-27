@@ -347,6 +347,204 @@ export const INTERACTABLE_SPOTS: InteractableSpot[] = [
       },
     ],
   },
+  {
+    id: 'pos_kamling_spot',
+    name: 'Pos Kamling & Gardu Ronda RT 03',
+    category: 'kuliner',
+    actionLabel: 'Nongkrong Ronda: Beli Kopi & Gorengan',
+    cost: 4000,
+    position: { x: -148.5, z: -35.5 },
+    radius: 7.5,
+    description: 'Gardu ronda siskamling warga di sudut Gang Merpati lengkap dengan kentongan bambu & kopi tubruk hangat.',
+    items: [
+      {
+        id: 'kopi_tubruk_ronda',
+        name: 'Kopi Hitam Tubruk Ronda',
+        price: 4000,
+        healAmount: 25,
+        description: 'Kopi hitam panas teman begadang ronda (+25 Darah)',
+      },
+      {
+        id: 'gorengan_mendoan',
+        name: 'Gorengan Bakwan & Tempe Mendoan Hangat',
+        price: 10000,
+        healAmount: 50,
+        description: 'Camilan renyah gurih sambal kecap cabai rawit (+50 Darah)',
+      },
+      {
+        id: 'paket_begadang',
+        name: 'Paket Begadang: Mie Rebus Telur + Kopi Tubruk',
+        price: 20000,
+        healAmount: 95,
+        description: 'Menu andalan penjaga malam pos kamling (+95 Darah)',
+      },
+    ],
+  },
+  {
+    id: 'toko_sembako_spot',
+    name: 'Toko Sembako Bu Tejo',
+    category: 'minimarket',
+    actionLabel: 'Beli Beras, Telur & Kerupuk Blek',
+    cost: 5000,
+    position: { x: -135.5, z: -28.5 },
+    radius: 7.5,
+    description: 'Toko kelontong sembako serba ada warga Gang Merpati dengan beras, telur, minyak, kerupuk blek, dan gas 3kg.',
+    items: [
+      {
+        id: 'kerupuk_blek_snack',
+        name: 'Kerupuk Kaleng Blek & Es Sirup',
+        price: 5000,
+        healAmount: 25,
+        description: 'Camilan gurih renyah teman santai (+25 Darah)',
+      },
+      {
+        id: 'mie_instan_telur',
+        name: 'Paket Mie Instan Telur & Minyak Goreng',
+        price: 16000,
+        healAmount: 60,
+        description: 'Bahan makanan praktis kebutuhan dapur (+60 Darah)',
+      },
+      {
+        id: 'paket_sembako_komplit',
+        name: 'Paket Beras 5kg + Telur 1kg + Minyak',
+        price: 45000,
+        healAmount: 100,
+        description: 'Persediaan pangan lengkap warga (+100 Darah Penuh)',
+      },
+    ],
+  },
+  {
+    id: 'pasar_tradisional_spot',
+    name: 'Kios Kuliner Pasar Tradisional Rakyat',
+    category: 'kuliner',
+    actionLabel: 'Beli Jajan Pasar & Nasi Rames',
+    cost: 7000,
+    position: { x: 140, z: -25 },
+    radius: 7.5,
+    description: 'Pusat belanja sayur mayur, buah segar, dan kuliner jajan pasar tradisional Nusantara.',
+    items: [
+      {
+        id: 'es_dawet_ayu',
+        name: 'Es Dawet Ayu Banjarnegara',
+        price: 7000,
+        healAmount: 30,
+        description: 'Santan gurih cendol hijau gula aren asli (+30 Darah)',
+      },
+      {
+        id: 'kue_klepon_lemper',
+        name: 'Jajan Pasar: Kue Klepon & Lemper Ayam',
+        price: 12000,
+        healAmount: 55,
+        description: 'Kue basah tradisional manis gurih legit (+55 Darah)',
+      },
+      {
+        id: 'nasi_rames_pasar',
+        name: 'Nasi Rames Pasar Komplit Rendang & Telur',
+        price: 26000,
+        healAmount: 100,
+        description: 'Sajian kenyang penuh cita rasa rempah Nusantara (+100 Darah)',
+      },
+    ],
+  },
+  {
+    id: 'warung_madura_spot',
+    name: 'Toko Kelontong Madura 24 Jam',
+    category: 'minimarket',
+    actionLabel: 'Beli Bensin Pertamini & Sembako',
+    cost: 6000,
+    position: { x: -148.5, z: 28.5 },
+    radius: 7.5,
+    description: 'Toko kelontong legendaris buka 24 jam dengan Pertamini bensin, gas 3kg, dan sembako komplit.',
+    items: [
+      {
+        id: 'air_dingin_snack',
+        name: 'Air Mineral Dingin & Camilan Kacang',
+        price: 6000,
+        healAmount: 25,
+        description: 'Pelepas dahaga cepat di gang kampung (+25 Darah)',
+      },
+      {
+        id: 'bensin_pertamini',
+        name: 'Bensin Pertamini Eceran & Minuman Energi',
+        price: 15000,
+        healAmount: 60,
+        description: 'Bahan bakar kendaraan & stamina tubuh (+60 Darah)',
+      },
+      {
+        id: 'ransum_sembako',
+        name: 'Paket Ransum Sembako & Kopi Instan',
+        price: 28000,
+        healAmount: 100,
+        description: 'Persediaan komplit kebutuhan warga (+100 Darah Penuh)',
+      },
+    ],
+  },
+  {
+    id: 'tpu_kamboja_spot',
+    name: 'TPU Kamboja Nusantara (Kuburan Warga)',
+    category: 'landmark',
+    actionLabel: 'Ziarah Makam: Beli Bunga Tabur & Air Mawar',
+    cost: 5000,
+    position: { x: -148.5, z: 76.0 },
+    radius: 8.5,
+    description: 'Tempat Pemakaman Umum warga yang teduh dengan Pohon Kamboja mekar, batu nisan kembar, dan kios kembang ziarah.',
+    items: [
+      {
+        id: 'bunga_tabur_mawar',
+        name: 'Keranjang Bunga Tabur Mawar & Melati',
+        price: 5000,
+        healAmount: 30,
+        description: 'Harum bunga ziarah menenangkan hati (+30 Darah)',
+      },
+      {
+        id: 'air_mawar_ziarah',
+        name: 'Paket Air Mawar & Doa Ziarah Makam',
+        price: 12000,
+        healAmount: 65,
+        description: 'Ketenangan batin di bawah teduhnya pohon kamboja (+65 Darah)',
+      },
+      {
+        id: 'kopi_penjaga_makam',
+        name: 'Kopi Hangat & Roti Kios Penjaga TPU',
+        price: 20000,
+        healAmount: 100,
+        description: 'Silaturahmi bersama penjaga makam TPU Kamboja (+100 Darah Penuh)',
+      },
+    ],
+  },
+  {
+    id: 'tps_kampung_spot',
+    name: 'TPS 04 Kampung Nusantara & Bank Sampah',
+    category: 'landmark',
+    actionLabel: 'Mampir TPS 04: Snack KPPS & Kopi Warga',
+    cost: 5000,
+    position: { x: -135.0, z: -62.0 },
+    radius: 8.0,
+    description: 'Tenda Tempat Pemungutan Suara (TPS 04) lengkap dengan bilik suara, kotak suara transparan, tinta ungu & Bank Sampah.',
+    items: [
+      {
+        id: 'air_mineral_tps',
+        name: 'Air Mineral Gelas & Permen Tenda TPS',
+        price: 5000,
+        healAmount: 25,
+        description: 'Segar sambil antre mencoblos di TPS 04 (+25 Darah)',
+      },
+      {
+        id: 'snack_kotak_kpps',
+        name: 'Roti Kotak KPPS (Lemper, Risoles & Bolu)',
+        price: 12000,
+        healAmount: 60,
+        description: 'Kudapan khas panitia pemungutan suara warga (+60 Darah)',
+      },
+      {
+        id: 'nasi_kotak_kpps',
+        name: 'Nasi Kotak Panitia KPPS Ayam Bakar Komplit',
+        price: 25000,
+        healAmount: 100,
+        description: 'Porsi komplit semangat mengawal suara rakyat (+100 Darah Penuh)',
+      },
+    ],
+  },
 ];
 
 export const MISSIONS: Mission[] = [
@@ -390,9 +588,30 @@ export const MISSIONS: Mission[] = [
     dropoffPos: { x: 32, z: -68, label: 'Masjid Agung Nusantara' },
     timeLimitSec: 95,
   },
+  {
+    id: 'misi_pasar_rakyat',
+    title: '05. Kirim Pasokan Pasar Tradisional ke Pos Ronda',
+    giver: 'Pengurus Paguyuban Pedagang Pasar',
+    description: 'Ambil pasokan kopi dan jajan pasar di Pasar Tradisional lalu antarkan ke Pos Kamling RT 03 di Gang Kampung Barat!',
+    reward: 250000,
+    pickupPos: { x: 140, z: -25, label: 'Kios Pasar Tradisional' },
+    dropoffPos: { x: -142, z: -30, label: 'Pos Kamling & Gardu Ronda' },
+    timeLimitSec: 85,
+  },
 ];
 
 export function getDistrictName(x: number, z: number): string {
+  // Player's Personal Safehouse
+  if (x >= -23.5 && x <= -11.5 && z >= 18.0 && z <= 30.0) {
+    return 'Rumah Pribadi Karakter Utama (Blok M)';
+  }
+  // New Expanded Indonesian Districts
+  if (x < -125 && z >= 60) return 'Kawasan TPU Kamboja (Kuburan) & Gang Melati';
+  if (x < -125 && z < -45) return 'Kampung Adat Joglo & TPS 04 Nusantara';
+  if (x < -125 && z >= -45 && z < 60) return 'Gang Permukiman Warga, TPS & Pos Kamling';
+  if (x > 120 && z < 20) return 'Kawasan Pasar Tradisional Rakyat';
+  if (x > 120 && z >= 20) return 'Perumahan Warga & Gang Kampung';
+
   if (Math.hypot(x - -90, z - -30) < 28) return 'Taman Medan Merdeka (Tugu Monas)';
   if (Math.hypot(x - 90, z - 30) < 28) return 'Taman Tugu Surabaya (Kota Pahlawan)';
   if (Math.hypot(x - -30, z - 90) < 26) return 'Taman Kota Nusantara';
@@ -402,7 +621,7 @@ export function getDistrictName(x: number, z: number): string {
   if (x < -40 && z < -60) return 'Distrik Niaga Sudirman';
   if (x < -15 && Math.abs(z) <= 40) return 'Pasar Kuliner Blok M';
   if (x > 10 && z > 20 && x < 65 && z < 60) return 'Kawasan Bengkel & Industri';
-  if (Math.abs(x) > 130 || Math.abs(z) > 130) return 'Lembah Sungai & Hutan Lindung';
+  if (Math.abs(x) > 175 || Math.abs(z) > 175) return 'Lembah Sungai & Hutan Lindung';
   return 'Simpang Raya Protokol Nusantara';
 }
 

@@ -78,6 +78,15 @@ export interface HudState {
   clockTimeText: string;
   autoTime: boolean;
   weather: WeatherType;
+  isInsideHome: boolean;
+  isNearHomeDoor: boolean;
+  playerHomeState: 'standing' | 'sitting' | 'sleeping' | 'eating';
+  homeTransition: {
+    direction: 'out' | 'in' | 'sleep';
+    title: string;
+    subtitle: string;
+  } | null;
 }
+
 
 

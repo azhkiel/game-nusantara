@@ -21,22 +21,22 @@ const INITIAL_HUD: HudState = {
   health: 75,
   maxHealth: 100,
   wantedStars: 0,
-  districtName: 'Alun-Alun Tugu Monas',
+  districtName: 'Rumah Pribadi Karakter Utama (Blok M)',
   inVehicle: false,
   currentVehicleName: 'Jalan Kaki',
   currentVehicleType: null,
   speedKmh: 0,
-  nearbyVehiclePrompt: 'Bajaj Oranye BBG',
+  nearbyVehiclePrompt: null,
   nearbySpot: null,
   activeMission: null,
   missionStage: 'idle',
   missionTimeLeft: 0,
   notification: {
-    title: 'Selamat Datang di Kota Raya Nusantara!',
-    subtitle: 'Waktu berjalan otomatis (Pagi → Siang → Sore → Malam). Aktifkan Hujan untuk efek partikel & suara rintik hujan!',
+    title: 'Selamat Pagi di Rumah Pribadi!',
+    subtitle: 'Kamu berada di dalam rumahmu. Silakan Tidur, Makan, Duduk di Sofa, atau melangkah Keluar Rumah menuju jalan raya!',
     tone: 'info',
   },
-  playerCoords: { x: 0, z: 26, heading: Math.PI },
+  playerCoords: { x: -18, z: 24, heading: Math.PI / 2 },
   targetCoords: null,
   trafficCoords: [],
   completedMissionIds: [],
@@ -44,6 +44,10 @@ const INITIAL_HUD: HudState = {
   clockTimeText: '08:00 WIB',
   autoTime: true,
   weather: 'cerah',
+  isInsideHome: true,
+  isNearHomeDoor: false,
+  playerHomeState: 'standing',
+  homeTransition: null,
 };
 
 export default function App() {
@@ -84,6 +88,12 @@ export default function App() {
 
   const handleContextAction = () => {
     engineRef.current?.triggerContextAction();
+  };
+
+  const handleHomeAction = (
+    action: 'sleep' | 'eat' | 'sit' | 'stand' | 'exit' | 'enter'
+  ) => {
+    engineRef.current?.performHomeAction(action);
   };
 
   const handleBuyShopItem = (spotId: string, itemId: string) => {
@@ -167,6 +177,7 @@ export default function App() {
         onSpawnVehicle={handleSpawnVehicle}
         onHonkHorn={handleHonkHorn}
         onContextAction={handleContextAction}
+        onHomeAction={handleHomeAction}
         onBuyShopItem={handleBuyShopItem}
         onStartMission={handleStartMission}
         onCancelMission={handleCancelMission}
@@ -184,3 +195,4 @@ export default function App() {
     </main>
   );
 }
+
